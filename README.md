@@ -163,7 +163,15 @@ folder **/ (root)**, and **Save**. The first build takes a minute or two.
 4. Name it **Trip Split** and tap **Add**.
 
 It launches full-screen with no Safari chrome, its own icon, and the dark theme
-follows your phone's appearance setting. Your URL and token stay saved, so it
+follows your phone's appearance setting.
+
+**If the icon ever looks wrong**, the rule is that an `apple-touch-icon` must be a
+**square, fully opaque, full-bleed** image with **no rounded corners of its own** —
+iOS applies its own squircle mask. Rounding the artwork first leaves pale
+triangles in the corners once the mask is applied. Transparency is just as bad,
+since it composites onto black. `mkicon.py` writes RGB PNGs with no alpha channel
+for exactly this reason. iOS also caches the icon hard: to see a change, remove
+the home-screen item and re-add it. Your URL and token stay saved, so it
 opens straight to the balances.
 
 ## 6. Optional: scan receipts and describe expenses out loud
@@ -328,8 +336,9 @@ keeps everyone current.
 | `index.html` | The whole frontend — markup, styles, and logic in one file |
 | `Code.gs` | Apps Script backend; paste into the Sheet-bound script |
 | `manifest.webmanifest` | Web app manifest for the home-screen install |
-| `icon-180.png` | Home screen icon |
-| `icon.svg` | Source for the icon |
+| `icon-*.png` | Home screen icons (180/167/152/120 for iOS, 192/512 for the manifest, 32 favicon) |
+| `mkicon.py` | Regenerates every icon PNG — run `python3 mkicon.py` |
+| `icon.svg` | Reference drawing of the icon |
 
 ## API
 
