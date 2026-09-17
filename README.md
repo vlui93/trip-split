@@ -170,8 +170,14 @@ follows your phone's appearance setting.
 iOS applies its own squircle mask. Rounding the artwork first leaves pale
 triangles in the corners once the mask is applied. Transparency is just as bad,
 since it composites onto black. `mkicon.py` writes RGB PNGs with no alpha channel
-for exactly this reason. iOS also caches the icon hard: to see a change, remove
-the home-screen item and re-add it. Your URL and token stay saved, so it
+for exactly this reason.
+
+**iOS caches home-screen icons by URL, and deleting the home-screen item does not
+clear that cache.** Changing the bytes behind the same filename will not show up.
+So the icon files carry a version in their name — bump `VERSION` in `mkicon.py`,
+run it, and point `index.html` and the manifest at the new names. Then hard-reload
+the page in Safari before adding it to the home screen again, or Safari may still
+be reading the cached HTML with the old filenames in it. Your URL and token stay saved, so it
 opens straight to the balances.
 
 ## 6. Optional: scan receipts and describe expenses out loud
@@ -336,8 +342,8 @@ keeps everyone current.
 | `index.html` | The whole frontend — markup, styles, and logic in one file |
 | `Code.gs` | Apps Script backend; paste into the Sheet-bound script |
 | `manifest.webmanifest` | Web app manifest for the home-screen install |
-| `icon-*.png` | Home screen icons (180/167/152/120 for iOS, 192/512 for the manifest, 32 favicon) |
-| `mkicon.py` | Regenerates every icon PNG — run `python3 mkicon.py` |
+| `icon-*-v2.png` | Home screen icons (180/167/152/120 for iOS, 192/512 for the manifest, 32 favicon). Versioned filenames — see below. |
+| `mkicon.py` | Regenerates every icon PNG — bump `VERSION`, then `python3 mkicon.py` |
 | `icon.svg` | Reference drawing of the icon |
 
 ## API

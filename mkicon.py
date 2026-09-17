@@ -71,8 +71,14 @@ def write_png(path, rows, size):
     open(path,'wb').write(png)
     return len(png)
 
-for s in (180, 167, 152, 120, 512, 32):
+# Bump this whenever the artwork changes. iOS caches home-screen icons by URL and
+# will not refetch the same filename, even if you delete and re-add the WebClip —
+# so the version has to be in the name, not just the bytes.
+VERSION = 2
+
+for s in (180, 167, 152, 120, 512, 192, 32):
     ss = 4 if s <= 200 else 2
     rows = render(s, ss)
-    n = write_png(f'icon-{s}.png', rows, s)
-    print(f'  icon-{s}.png  {n:>7} bytes')
+    name = f'icon-{s}-v{VERSION}.png'
+    n = write_png(name, rows, s)
+    print(f'  {name}  {n:>7} bytes')
