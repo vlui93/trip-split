@@ -202,6 +202,14 @@ Free-tier limits are per-minute and per-day and sit far above what a trip needs 
 a few dozen receipts a day is not close. If you do hit one, the app says so and
 you enter that expense by hand.
 
+**Overload (503) is the common annoyance, not quota.** Free-tier traffic is the
+first thing shed when Google is busy. The code retries three times with backoff
+(honouring the `retryDelay` Google sends when it sends one), and if a model is
+still overloaded after that it swaps to another model rather than failing —
+a less fashionable one is usually free. Worst case it gives up after about ten
+seconds and you type the expense in. If it happens constantly at the hour you
+travel, Claude or Gemini's paid tier both skip the free-tier queue.
+
 **Model names drift, and retired ones stay listed.** When a call fails on the
 model, the code takes the replacement Google names in the error text first
 (`Please update your code to use models/...`), then falls back to `ListModels`,

@@ -821,10 +821,10 @@ function claudeCall(system, parts, people) {
     fallbacks: 'default'
   };
 
-  var res = claudeFetch(key, body, true);
+  var res = retryFetch(function () { return claudeFetch(key, body, true); });
   if (res.getResponseCode() === 400 && /fallback|beta/i.test(res.getContentText())) {
     delete body.fallbacks;
-    res = claudeFetch(key, body, false);
+    res = retryFetch(function () { return claudeFetch(key, body, false); });
   }
 
   var code = res.getResponseCode();
@@ -834,6 +834,7 @@ function claudeCall(system, parts, people) {
     try { msg = JSON.parse(text).error.message; } catch (err) {}
     if (code === 401) msg = 'Anthropic rejected the API key. Re-run setApiKey with a valid key.';
     if (code === 429) msg = 'Anthropic rate limit hit. Wait a moment and try again.';
+    if (code === 529 || code >= 500) msg = 'Anthropic is overloaded. It already retried with backoff — try again shortly.';
     throw new Error('Claude error ' + code + ': ' + msg);
   }
 
@@ -974,6 +975,33 @@ function listGeminiModels(key) {
   return names;
 }
 
+/**
+ * Retry transient server-side failures (503 overloaded, 5xx, 429) with backoff.
+ * Free tiers are the first thing shed when a provider is busy, so a couple of
+ * seconds of patience beats handing the user an error they can do nothing with.
+ * Anything below 500 comes straight back — a real error, or a 404 for the model
+ * ladder to deal with.
+ */
+function retryFetch(fn, tries) {
+  tries = tries || 3;
+  var res;
+  for (var i = 0; i < tries; i++) {
+    res = fn();
+    var code = res.getResponseCode();
+    if (code < 500 && code !== 429) return res;
+    if (i === tries - 1) return res;
+    Utilities.sleep(retryDelayMs(res.getContentText(), i));
+  }
+  return res;
+}
+
+/** Honour the provider's own retryDelay when it sends one, else back off 1.5s, 3s, 6s. */
+function retryDelayMs(text, attempt) {
+  var m = String(text).match(/"retryDelay"\s*:\s*"(\d+(?:\.\d+)?)s"/);
+  if (m) return Math.min(Number(m[1]) * 1000 + 250, 20000);
+  return Math.min(1500 * Math.pow(2, attempt), 12000);
+}
+
 function geminiFetch(key, model, body) {
   return UrlFetchApp.fetch(
     GEMINI_BASE + '/models/' + encodeURIComponent(model) + ':generateContent?key=' + encodeURIComponent(key),
@@ -1008,7 +1036,7 @@ function geminiCall(system, parts, people) {
 
   for (var attempt = 0; attempt < 4; attempt++) {
     tried.push(model);
-    res  = geminiFetch(key, model, body);
+    res  = retryFetch((function (m) { return function () { return geminiFetch(key, m, body); }; })(model));
     code = res.getResponseCode();
     text = res.getContentText();
 
@@ -1016,7 +1044,9 @@ function geminiCall(system, parts, people) {
       if (props.getProperty('GEMINI_MODEL') !== model) props.setProperty('GEMINI_MODEL', model);
       break;
     }
-    if (!isModelProblem(code, text)) break;
+    // A model that is still overloaded after backing off is worth swapping out of —
+    // a less fashionable one is usually free.
+    if (!isModelProblem(code, text) && code !== 503) break;
 
     var next = suggestedModel(text, tried) || findGeminiModel(key, tried);
     if (!next) break;
@@ -1031,6 +1061,11 @@ function geminiCall(system, parts, people) {
     }
     if (code === 429) {
       msg = 'Free tier limit reached for now. Wait a few minutes, or enter this one by hand.';
+    }
+    if (code === 503 || code >= 500) {
+      msg = 'Google is overloaded right now and the free tier is the first to get squeezed. ' +
+            'It already retried ' + tried.length + ' model(s) with backoff. Try again in a minute, ' +
+            'or just type this one in.';
     }
     if (isModelProblem(code, text)) {
       msg = 'No usable Gemini model found. Tried: ' + tried.join(', ') +
