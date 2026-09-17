@@ -41,6 +41,10 @@
   }
 }
 *{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+/* Text selection and the long-press callout are the two biggest tells that a
+   home-screen app is really a web page. Inputs keep both. */
+body{-webkit-user-select:none;user-select:none;-webkit-touch-callout:none}
+input,textarea,select{-webkit-user-select:text;user-select:text}
 html,body{margin:0;padding:0}
 body{
   background:var(--bg); color:var(--text);
@@ -56,8 +60,12 @@ button{border:0;background:none;cursor:pointer}
 
 /* ---------- layout ---------- */
 .screen{display:none;padding:0 16px 24px}
-.screen.on{display:block;animation:fade .18s ease}
-@keyframes fade{from{opacity:0;transform:translateY(4px)}to{opacity:1;transform:none}}
+.screen.on{display:block;animation:screenIn .26s cubic-bezier(.22,.9,.28,1)}
+@keyframes screenIn{from{opacity:0;transform:translateY(10px) scale(.994)}to{opacity:1;transform:none}}
+@keyframes fade{from{opacity:0}to{opacity:1}}
+@media (prefers-reduced-motion:reduce){
+  .screen.on,.sheet .panel,.toast{animation:none!important;transition:none!important}
+}
 .topbar{
   position:sticky;top:0;z-index:20;background:var(--bg);
   padding:calc(var(--safe-t) + 14px) 0 10px;margin:0 -16px 4px;
@@ -69,7 +77,15 @@ button{border:0;background:none;cursor:pointer}
 .topbar h1{font-size:26px;flex:1}
 .sub{color:var(--muted);font-size:13px;margin:2px 0 14px}
 
-.card{background:var(--surface);border:1px solid var(--line);border-radius:var(--r);padding:14px;margin-bottom:12px}
+.card{background:var(--surface);border:1px solid var(--line);border-radius:var(--r);padding:14px;margin-bottom:12px;
+  box-shadow:0 1px 2px rgba(16,24,40,.04),0 1px 3px rgba(16,24,40,.03)}
+@media (prefers-color-scheme:dark){.card{box-shadow:0 1px 2px rgba(0,0,0,.3)}}
+.card.hero{background:linear-gradient(150deg,var(--accent) 0%,color-mix(in srgb,var(--accent) 72%,#0b1020) 100%);
+  border-color:transparent;color:#fff;box-shadow:0 10px 24px -12px color-mix(in srgb,var(--accent) 70%,transparent)}
+.card.hero .section-label,.card.hero h3{color:rgba(255,255,255,.72)}
+.card.hero .tag{background:rgba(255,255,255,.18);color:#fff}
+.press{transition:transform .1s ease,opacity .1s ease}
+.press:active{transform:scale(.985);opacity:.9}
 .card.tight{padding:10px 14px}
 .row{display:flex;align-items:center;gap:12px}
 .row.between{justify-content:space-between}
@@ -137,7 +153,8 @@ select{background-image:linear-gradient(45deg,transparent 50%,var(--muted) 50%),
 .ex .t2{font-size:12.5px;color:var(--muted);margin-top:2px}
 .ex .r1{font-weight:700;font-size:15.5px;text-align:right}
 .ex .r2{font-size:12px;color:var(--muted);text-align:right;margin-top:2px}
-.empty{text-align:center;color:var(--muted);padding:34px 16px;font-size:14.5px}
+.empty{text-align:center;color:var(--muted);padding:38px 18px;font-size:14.5px;line-height:1.5}
+.empty .big{display:block;font-size:30px;margin-bottom:10px;opacity:.45}
 
 /* ---------- bottom nav ---------- */
 .nav{
@@ -148,23 +165,37 @@ select{background-image:linear-gradient(45deg,transparent 50%,var(--muted) 50%),
   border-top:1px solid var(--line);
   display:grid;grid-template-columns:repeat(5,1fr);align-items:center;
 }
-.nav button{height:58px;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:3px;color:var(--faint);font-size:10.5px;font-weight:650}
-.nav button .gi{font-size:20px;line-height:1}
+.nav button{height:58px;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:3px;color:var(--faint);font-size:10px;font-weight:650;letter-spacing:.01em;transition:color .16s}
+.nav button svg{width:24px;height:24px;stroke:currentColor;fill:none;stroke-width:1.9;stroke-linecap:round;stroke-linejoin:round;transition:transform .18s cubic-bezier(.3,1.4,.5,1)}
 .nav button.on{color:var(--accent)}
+.nav button.on svg{transform:translateY(-1px) scale(1.06)}
+.nav button:active svg{transform:scale(.9)}
 .nav .fab{position:relative}
-.nav .fab .disc{width:52px;height:52px;border-radius:17px;background:var(--accent);color:var(--accent-ink);display:grid;place-items:center;font-size:27px;font-weight:400;box-shadow:0 6px 18px -4px color-mix(in srgb,var(--accent) 60%,transparent);margin-top:-14px}
+.nav .fab .disc{width:52px;height:52px;border-radius:17px;background:var(--accent);color:var(--accent-ink);display:grid;place-items:center;
+  box-shadow:0 6px 18px -4px color-mix(in srgb,var(--accent) 60%,transparent);margin-top:-14px;
+  transition:transform .14s cubic-bezier(.3,1.5,.5,1)}
+.nav .fab:active .disc{transform:scale(.9)}
+.nav .fab .disc svg{stroke:currentColor;fill:none;stroke-linecap:round}
 
 /* ---------- sheet ---------- */
 .sheet{position:fixed;inset:0;z-index:60;display:none}
 .sheet.on{display:block}
 .sheet .scrim{position:absolute;inset:0;background:rgba(6,10,24,.5);animation:fade .2s}
+.ptr{position:fixed;top:0;left:0;right:0;z-index:30;display:flex;align-items:center;justify-content:center;
+  pointer-events:none;height:0;overflow:hidden;padding-top:var(--safe-t)}
+.ptr .ring{width:26px;height:26px;border-radius:50%;border:2.5px solid var(--line);border-top-color:var(--accent);opacity:0}
+.ptr.spin .ring{animation:spin .7s linear infinite;opacity:1}
 .sheet .panel{
   position:absolute;left:0;right:0;bottom:0;max-height:94vh;overflow-y:auto;
   -webkit-overflow-scrolling:touch;
   background:var(--bg);border-radius:20px 20px 0 0;
   padding:8px 16px calc(24px + var(--safe-b));
-  animation:up .26s cubic-bezier(.2,.8,.25,1);
+  animation:up .3s cubic-bezier(.22,.9,.28,1);
+  will-change:transform;
 }
+.sheet .panel.dragging{animation:none;transition:none}
+.sheet .panel.settling{animation:none;transition:transform .22s cubic-bezier(.22,.9,.28,1)}
+.grab{touch-action:none}
 @keyframes up{from{transform:translateY(100%)}to{transform:none}}
 .grab{width:38px;height:4px;border-radius:99px;background:var(--line);margin:6px auto 10px}
 .sheet-head{position:sticky;top:0;background:var(--bg);z-index:2;display:flex;align-items:center;gap:10px;padding:4px 0 12px}
@@ -283,6 +314,7 @@ select{background-image:linear-gradient(45deg,transparent 50%,var(--muted) 50%),
 
   <div class="section-label">People</div>
   <div class="card stack" id="peopleBox"></div>
+  <div class="card" id="meBox"></div>
 
   <div class="section-label">Connection</div>
   <div class="card stack">
@@ -297,11 +329,16 @@ select{background-image:linear-gradient(45deg,transparent 50%,var(--muted) 50%),
 
 <!-- ============ NAV ============ -->
 <nav class="nav">
-  <button data-go="home" class="on"><span class="gi">◉</span>Home</button>
-  <button data-go="history"><span class="gi">☰</span>History</button>
-  <button class="fab" id="addBtn"><span class="disc">+</span></button>
-  <button data-go="settle"><span class="gi">⇄</span>Settle</button>
-  <button data-go="more"><span class="gi">⚙</span>More</button>
+  <button data-go="home" class="on" aria-label="Home">
+    <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3.2 10.4 12 3.6l8.8 6.8"/><path d="M5.6 9.2V19a1.4 1.4 0 0 0 1.4 1.4h10a1.4 1.4 0 0 0 1.4-1.4V9.2"/><path d="M9.8 20.4v-5.2h4.4v5.2"/></svg>Home</button>
+  <button data-go="history" aria-label="History">
+    <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 6.5h16"/><path d="M4 12h16"/><path d="M4 17.5h10"/></svg>History</button>
+  <button class="fab" id="addBtn" aria-label="Add expense">
+    <span class="disc"><svg viewBox="0 0 24 24" aria-hidden="true" style="width:25px;height:25px;stroke-width:2.2"><path d="M12 5.5v13M5.5 12h13"/></svg></span></button>
+  <button data-go="settle" aria-label="Settle up">
+    <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 8.5h13"/><path d="M13.8 5.2 17.2 8.5l-3.4 3.3"/><path d="M20 15.5H7"/><path d="M10.2 12.2 6.8 15.5l3.4 3.3"/></svg>Settle</button>
+  <button data-go="more" aria-label="Settings">
+    <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 8h14"/><path d="M5 16h14"/><circle cx="9.5" cy="8" r="2.2"/><circle cx="15" cy="16" r="2.2"/></svg>More</button>
 </nav>
 
 <!-- ============ ADD / EDIT EXPENSE SHEET ============ -->
@@ -456,6 +493,7 @@ select{background-image:linear-gradient(45deg,transparent 50%,var(--muted) 50%),
   </div>
 </div>
 
+<div class="ptr" id="ptr"><div class="ring"></div></div>
 <div class="toast" id="toast"></div>
 <script>
 "use strict";
@@ -480,7 +518,7 @@ const K_CFG='tsplit.cfg', K_STATE='tsplit.state', K_QUEUE='tsplit.queue', K_PREF
 let CFG   = load(K_CFG,   null);
 let S     = load(K_STATE, { people:[], expenses:[], rates:[], settlements:[] });
 let QUEUE = load(K_QUEUE, []);
-let PREFS = load(K_PREFS, { lastCity:'Hong Kong' });
+let PREFS = load(K_PREFS, { lastCity:'Hong Kong', me:'' });
 let syncing = false, lastSyncErr = '';
 
 function load(k, d){ try{ const v=localStorage.getItem(k); return v?JSON.parse(v):d; }catch(e){ return d; } }
@@ -716,9 +754,10 @@ function renderHome(){
     const v = b[n] || 0;
     const cls = v > 0 ? 'pos' : v < 0 ? 'neg' : 'zero';
     const lbl = v > 0 ? 'is owed' : v < 0 ? 'owes' : 'square';
+    const isMe = PREFS.me === n;
     return `<div class="bal">
-      <div class="av">${esc(initials(n))}</div>
-      <div class="grow"><div style="font-weight:650">${esc(n)}</div>
+      <div class="av"${isMe ? ' style="background:var(--accent);color:var(--accent-ink)"' : ''}>${esc(initials(n))}</div>
+      <div class="grow"><div style="font-weight:650">${esc(n)}${isMe ? ' <span class="tag" style="margin-left:4px">you</span>' : ''}</div>
         <div style="font-size:12.5px;color:var(--muted)">${lbl}</div></div>
       <div class="amt mono ${cls}">${v===0?'—':fmtAudC(Math.abs(v))}</div>
     </div>`;
@@ -736,7 +775,7 @@ function renderHome(){
 
   const recent = (S.expenses||[]).slice().sort(byDateDesc).slice(0,6);
   $('#recent').innerHTML = recent.length ? recent.map(exRow).join('')
-    : `<div class="empty">No expenses yet.<br>Tap <b>+</b> to add the first one.</div>`;
+    : `<div class="empty"><span class="big">🧾</span>No expenses yet.<br>Tap <b>+</b> to add the first one.</div>`;
 }
 
 function byDateDesc(a,b){
@@ -746,7 +785,7 @@ function byDateDesc(a,b){
 
 function exRow(ex){
   const me = ex.currency !== 'AUD';
-  return `<button class="ex" data-ex="${esc(ex.id)}">
+  return `<button class="ex press" data-ex="${esc(ex.id)}">
     <div class="ic">${esc(cityIcon(ex.city))}</div>
     <div class="grow">
       <div class="t1 ellip">${esc(ex.description || 'Expense')}</div>
@@ -789,7 +828,7 @@ function renderHistory(){
   const sum = list.reduce((a,e) => a + cents(e.amount_aud), 0);
   $('#histCount').textContent = list.length + ' · ' + fmtAudC(sum);
   $('#histList').innerHTML = list.length ? list.map(exRow).join('')
-    : `<div class="empty">Nothing matches that filter.</div>`;
+    : `<div class="empty"><span class="big">🔍</span>Nothing matches that filter.</div>`;
 }
 
 /* ---------------- render: settle ---------------- */
@@ -806,7 +845,7 @@ function renderSettle(){
       </div>
       <button class="btn sm primary" data-pay="${i}">Settle</button>
     </div>`).join('')
-    : `<div class="empty">All square — no transfers needed.</div>`;
+    : `<div class="empty"><span class="big">✨</span>All square — no transfers needed.</div>`;
   window.__tx = tx;
 
   const log = (S.settlements||[]).slice().sort(byDateDesc);
@@ -822,7 +861,7 @@ function renderSettle(){
         <button class="btn sm ghost" style="margin-top:4px" data-unsettle="${esc(st.id)}">Undo</button>
       </div>
     </div>`).join('')
-    : `<div class="empty">No settlements logged.</div>`;
+    : `<div class="empty">Nothing settled yet.</div>`;
 }
 
 /* ---------------- render: more ---------------- */
@@ -849,6 +888,14 @@ function renderMore(){
   $('#peopleBox').innerHTML = S.people.map((p,i) =>
     `<div class="row"><input type="text" data-person="${i}" value="${esc(p)}"></div>`).join('')
     + `<button class="btn ghost full sm" id="savePeople">Save names</button>`;
+
+  $('#meBox').innerHTML =
+    `<label class="fl">Which one is you?</label>
+     <div class="chips">${S.people.map(p =>
+        `<button class="chip ${PREFS.me===p?'on':''}" data-me="${esc(p)}">${esc(p)}</button>`).join('')}</div>
+     <div style="font-size:12.5px;color:var(--muted);margin-top:9px">
+       Used on this phone only. New expenses default to you as the payer, and your
+       row is highlighted on the home screen.</div>`;
 
   $('#cfgUrlShown').textContent = CFG && CFG.url ? CFG.url.replace(/^https:\/\//,'').slice(0,34) + '…' : '—';
   $('#queueCount').textContent = QUEUE.length;
@@ -878,7 +925,9 @@ function newForm(){
   const city = PREFS.lastCity || 'Hong Kong';
   return {
     id:null, date:today(), city, cur:curOf(city), amount:'', desc:'',
-    paid_by: S.people[0] || '', split_type:'equal',
+    // On a shared trip you are nearly always entering something you paid for.
+    paid_by: (PREFS.me && S.people.includes(PREFS.me)) ? PREFS.me : (S.people[0] || ''),
+    split_type:'equal',
     participants: S.people.slice(), exact:{}, percent:{},
     items:[{ name:'', amount:'', people:S.people.slice() }], extra:''
   };
@@ -1213,7 +1262,7 @@ function unsettle(id){
 
 document.addEventListener('click', e => {
   const t = e.target.closest('[data-go],[data-close],[data-ex],[data-city],[data-paid],[data-part],' +
-    '[data-st],[data-fc],[data-fp],[data-rate],[data-pay],[data-unsettle],[data-editex],[data-ip],[data-idel]');
+    '[data-st],[data-fc],[data-fp],[data-rate],[data-pay],[data-unsettle],[data-editex],[data-ip],[data-idel],[data-me]');
   if (!t) return;
   const d = t.dataset;
 
@@ -1234,6 +1283,10 @@ document.addEventListener('click', e => {
   else if (d.st)   { F.split_type = d.st; renderForm(); }
   else if (d.fc !== undefined && t.hasAttribute('data-fc')){ HF.city = d.fc; renderHistory(); }
   else if (d.fp !== undefined && t.hasAttribute('data-fp')){ HF.person = d.fp; renderHistory(); }
+  else if (d.me !== undefined && t.hasAttribute('data-me')){
+    PREFS.me = (PREFS.me === d.me) ? '' : d.me;
+    save(K_PREFS, PREFS); renderMore(); renderHome();
+  }
   else if (d.rate) { openRate(d.rate); }
   else if (d.pay !== undefined && t.hasAttribute('data-pay')){ openPay(Number(d.pay)); }
   else if (d.unsettle){ unsettle(d.unsettle); }
@@ -1546,6 +1599,118 @@ document.addEventListener('click', e => {
     renderForm(); renderAiNote();
   }
 });
+
+/* ============================================================
+   Gestures — the things that separate a home-screen web page
+   from something that feels built for the phone.
+   ============================================================ */
+
+/* ---- pull down to sync ---- */
+(function(){
+  const el = $('#ptr');
+  let y0 = null, pulling = false, dist = 0;
+  const MAX = 90, TRIGGER = 64;
+
+  addEventListener('touchstart', e => {
+    // Only from the very top of a screen, never from inside an open sheet.
+    if (window.scrollY > 0 || e.target.closest('.sheet') || document.querySelector('.sheet.on')) return;
+    y0 = e.touches[0].clientY; dist = 0; pulling = false;
+  }, { passive:true });
+
+  addEventListener('touchmove', e => {
+    if (y0 === null) return;
+    const d = e.touches[0].clientY - y0;
+    if (d < 0 || window.scrollY > 0){ y0 = null; return; }
+    if (d > 6){
+      pulling = true;
+      dist = Math.min(d * 0.45, MAX);            // resistance
+      el.style.height = dist + 'px';
+      const r = el.querySelector('.ring');
+      r.style.opacity = Math.min(dist / TRIGGER, 1);
+      r.style.transform = 'rotate(' + (dist * 4) + 'deg)';
+      if (e.cancelable) e.preventDefault();       // stop the page scrolling with it
+    }
+  }, { passive:false });
+
+  addEventListener('touchend', () => {
+    if (y0 === null) return;
+    const go = pulling && dist >= TRIGGER;
+    y0 = null; pulling = false;
+    if (go){
+      el.classList.add('spin');
+      el.style.height = '44px';
+      Promise.resolve(sync()).finally(() => {
+        el.classList.remove('spin');
+        el.style.height = '0px';
+        el.querySelector('.ring').style.opacity = 0;
+      });
+    } else {
+      el.style.height = '0px';
+      el.querySelector('.ring').style.opacity = 0;
+    }
+  }, { passive:true });
+})();
+
+/* ---- swipe a sheet down to dismiss ---- */
+(function(){
+  let panel = null, y0 = 0, dy = 0, active = false;
+
+  addEventListener('touchstart', e => {
+    const sheet = e.target.closest('.sheet.on');
+    if (!sheet) return;
+    const p = sheet.querySelector('.panel');
+    if (!p) return;
+    // Only when the panel is scrolled to the top, so it never fights its own scroll.
+    if (p.scrollTop > 0) return;
+    // Never start a dismiss from a field the user is trying to use.
+    if (e.target.closest('input,textarea,select,button')) return;
+    panel = p; y0 = e.touches[0].clientY; dy = 0; active = false;
+  }, { passive:true });
+
+  addEventListener('touchmove', e => {
+    if (!panel) return;
+    dy = e.touches[0].clientY - y0;
+    if (dy <= 0){ if (active){ panel.style.transform = ''; } return; }
+    if (dy > 4){
+      if (!active){ active = true; panel.classList.add('dragging'); }
+      panel.style.transform = 'translateY(' + dy + 'px)';
+      if (e.cancelable) e.preventDefault();
+    }
+  }, { passive:false });
+
+  addEventListener('touchend', () => {
+    if (!panel) return;
+    const p = panel, close = active && dy > 110;
+    panel = null;
+    p.classList.remove('dragging');
+    p.classList.add('settling');
+    if (close){
+      p.style.transform = 'translateY(100%)';
+      const sheet = p.closest('.sheet');
+      setTimeout(() => {
+        if (sheet) closeSheet(sheet.id);
+        p.classList.remove('settling'); p.style.transform = '';
+      }, 200);
+    } else {
+      p.style.transform = '';
+      setTimeout(() => p.classList.remove('settling'), 240);
+    }
+  }, { passive:true });
+})();
+
+/* ---- count balances up rather than snapping ---- */
+function countUp(el, to, fmt){
+  const from = Number(el.dataset.v || 0);
+  if (from === to){ el.textContent = fmt(to); return; }
+  el.dataset.v = to;
+  const t0 = performance.now(), dur = 420;
+  (function step(t){
+    const k = Math.min((t - t0) / dur, 1);
+    const e = 1 - Math.pow(1 - k, 3);          // ease out
+    el.textContent = fmt(from + (to - from) * e);
+    if (k < 1) requestAnimationFrame(step);
+  })(performance.now());
+}
 
 /* ---------------- boot ---------------- */
 renderAll();

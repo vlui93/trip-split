@@ -281,6 +281,44 @@ These need a live connection, so they will not work in mainland China without a
 VPN. Note that with Gemini both hops are Google, so one VPN covers it. Everything else in the app still works offline —
 type the expense in by hand and it queues like any other change.
 
+## 7. Putting it on all three phones
+
+The Sheet is the shared store, so every phone runs the same setup:
+
+1. Open **https://vlui93.github.io/trip-split/** in Safari.
+2. Paste the same `/exec` URL and the same API token.
+3. Add to Home Screen.
+4. **More → Which one is you?** — pick your name.
+
+That last step is per-phone. It defaults new expenses to you as the payer (which
+is what you want nearly every time) and marks your row on the home screen. It is
+stored on the device, not in the Sheet, so each phone can answer differently.
+
+### How sharing behaves
+
+**Syncing is not live.** A phone pulls when it opens, when you switch back to it,
+when you pull down on the home screen, and when it flushes its own queue. So
+Mei's dinner shows up on your phone next time you open it, not the instant she
+saves it. For splitting a trip that is fine; do not expect a chat app.
+
+**Adding is conflict-free.** Every expense gets a unique id on the phone that
+created it, so three people adding at once never collide, even if all three were
+offline and queued things up.
+
+**Editing the same expense is last-write-wins.** If two of you edit the same
+dinner before either syncs, the one that reaches the Sheet second overwrites the
+other. Rare in practice, but it will not warn you.
+
+**Everyone shares one token, so everyone has full access** — any phone can edit
+or delete anything. That is the intended model for three people on a trip
+together, not a permissions system. If someone loses their phone, run
+`resetToken()` in the script editor and reconnect the other two.
+
+**Renaming people is a shared action.** Names are the key that ties expenses to
+people, so if one person renames "Dan" to "Daniel", earlier expenses still say
+"Dan". The home screen will show both until you fix it. Agree the three names
+once at the start and leave them alone.
+
 ---
 
 ## Exchange rates
