@@ -1,0 +1,1291 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Trip Split</title>
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, maximum-scale=1, user-scalable=no">
+<meta name="description" content="Bill splitter for the Greater China trip, 16 Oct – 1 Nov 2026.">
+<meta name="theme-color" content="#0f172a">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Trip Split">
+<link rel="apple-touch-icon" href="icon-180.png">
+<link rel="icon" href="icon-180.png">
+<link rel="manifest" href="manifest.webmanifest">
+<style>
+:root{
+  --bg:#f4f5f7; --surface:#ffffff; --surface-2:#eceef2; --line:#dcdfe6;
+  --text:#101828; --muted:#667085; --faint:#98a2b3;
+  --accent:#2563eb; --accent-ink:#ffffff; --accent-soft:#e3ecfe;
+  --pos:#047857; --pos-soft:#d9f2e8;
+  --neg:#be123c; --neg-soft:#fde7ec;
+  --warn:#b45309; --warn-soft:#fdf0d5;
+  --r:14px; --tap:52px;
+  --safe-t:env(safe-area-inset-top,0px);
+  --safe-b:env(safe-area-inset-bottom,0px);
+  --nav-h:calc(62px + var(--safe-b));
+}
+@media (prefers-color-scheme:dark){
+  :root{
+    --bg:#0b1020; --surface:#151b2e; --surface-2:#1e2540; --line:#2a3350;
+    --text:#eef2ff; --muted:#9aa5c4; --faint:#6b769a;
+    --accent:#5b8cff; --accent-ink:#06102a; --accent-soft:#1c2a52;
+    --pos:#34d399; --pos-soft:#0f3b30;
+    --neg:#fb7185; --neg-soft:#43162a;
+    --warn:#fbbf24; --warn-soft:#3d2f10;
+  }
+}
+*{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+html,body{margin:0;padding:0}
+body{
+  background:var(--bg); color:var(--text);
+  font:16px/1.45 -apple-system,BlinkMacSystemFont,"SF Pro Text","Segoe UI",Roboto,sans-serif;
+  -webkit-font-smoothing:antialiased;
+  padding-bottom:var(--nav-h);
+  overscroll-behavior-y:contain;
+}
+h1,h2,h3{margin:0;font-weight:650;letter-spacing:-.01em}
+button,input,select,textarea{font:inherit;color:inherit}
+button{border:0;background:none;cursor:pointer}
+.mono{font-variant-numeric:tabular-nums;font-feature-settings:"tnum"}
+
+/* ---------- layout ---------- */
+.screen{display:none;padding:0 16px 24px}
+.screen.on{display:block;animation:fade .18s ease}
+@keyframes fade{from{opacity:0;transform:translateY(4px)}to{opacity:1;transform:none}}
+.topbar{
+  position:sticky;top:0;z-index:20;background:var(--bg);
+  padding:calc(var(--safe-t) + 14px) 0 10px;margin:0 -16px 4px;
+  padding-left:16px;padding-right:16px;
+  display:flex;align-items:center;gap:10px;
+  border-bottom:1px solid transparent;
+}
+.topbar.stuck{border-bottom-color:var(--line)}
+.topbar h1{font-size:26px;flex:1}
+.sub{color:var(--muted);font-size:13px;margin:2px 0 14px}
+
+.card{background:var(--surface);border:1px solid var(--line);border-radius:var(--r);padding:14px;margin-bottom:12px}
+.card.tight{padding:10px 14px}
+.row{display:flex;align-items:center;gap:12px}
+.row.between{justify-content:space-between}
+.grow{flex:1;min-width:0}
+.stack>*+*{margin-top:10px}
+.ellip{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.hr{height:1px;background:var(--line);margin:12px -14px}
+.section-label{font-size:12px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:var(--faint);margin:20px 0 8px}
+
+/* ---------- controls ---------- */
+.btn{
+  min-height:var(--tap);padding:0 18px;border-radius:12px;
+  background:var(--surface-2);color:var(--text);font-weight:600;
+  display:inline-flex;align-items:center;justify-content:center;gap:8px;
+  border:1px solid var(--line);transition:transform .08s;
+}
+.btn:active{transform:scale(.975)}
+.btn.primary{background:var(--accent);color:var(--accent-ink);border-color:transparent}
+.btn.danger{background:var(--neg-soft);color:var(--neg);border-color:transparent}
+.btn.ghost{background:transparent;border-color:var(--line)}
+.btn.full{width:100%}
+.btn.sm{min-height:40px;padding:0 14px;font-size:14px;border-radius:10px}
+.btn[disabled]{opacity:.45;pointer-events:none}
+.iconbtn{width:42px;height:42px;border-radius:11px;background:var(--surface-2);display:grid;place-items:center;font-size:18px;border:1px solid var(--line)}
+
+label.fl{display:block;font-size:12px;font-weight:700;letter-spacing:.04em;text-transform:uppercase;color:var(--faint);margin-bottom:6px}
+input[type=text],input[type=number],input[type=date],select,textarea{
+  width:100%;min-height:var(--tap);padding:12px 14px;border-radius:12px;
+  background:var(--surface);border:1px solid var(--line);outline:none;
+  appearance:none;-webkit-appearance:none;
+}
+input:focus,select:focus,textarea:focus{border-color:var(--accent);box-shadow:0 0 0 3px var(--accent-soft)}
+select{background-image:linear-gradient(45deg,transparent 50%,var(--muted) 50%),linear-gradient(135deg,var(--muted) 50%,transparent 50%);background-position:calc(100% - 20px) 22px,calc(100% - 15px) 22px;background-size:5px 5px,5px 5px;background-repeat:no-repeat}
+.amount-in{font-size:34px !important;font-weight:700;letter-spacing:-.02em;padding:14px !important;text-align:right}
+
+.chips{display:flex;flex-wrap:wrap;gap:8px}
+.chip{
+  min-height:46px;padding:0 15px;border-radius:12px;border:1px solid var(--line);
+  background:var(--surface);font-weight:600;font-size:15px;
+  display:inline-flex;align-items:center;gap:6px;transition:transform .08s;
+}
+.chip:active{transform:scale(.96)}
+.chip.on{background:var(--accent);color:var(--accent-ink);border-color:transparent}
+.chip small{opacity:.7;font-weight:600;font-size:11px}
+.seg{display:grid;grid-template-columns:repeat(4,1fr);gap:6px;background:var(--surface-2);padding:5px;border-radius:14px;border:1px solid var(--line)}
+.seg button{min-height:44px;border-radius:10px;font-size:13.5px;font-weight:650;color:var(--muted)}
+.seg button.on{background:var(--surface);color:var(--text);box-shadow:0 1px 3px rgba(0,0,0,.12)}
+
+/* ---------- balances ---------- */
+.bal{display:flex;align-items:center;gap:12px;padding:13px 0}
+.bal+.bal{border-top:1px solid var(--line)}
+.av{width:42px;height:42px;border-radius:50%;display:grid;place-items:center;font-weight:700;font-size:15px;background:var(--surface-2);color:var(--muted);flex:none}
+.bal .amt{font-size:19px;font-weight:700;letter-spacing:-.01em}
+.pos{color:var(--pos)} .neg{color:var(--neg)} .zero{color:var(--muted)}
+.tag{font-size:11px;font-weight:700;padding:3px 8px;border-radius:999px;background:var(--surface-2);color:var(--muted);letter-spacing:.03em}
+.tag.live{background:var(--pos-soft);color:var(--pos)}
+.tag.manual{background:var(--warn-soft);color:var(--warn)}
+.tag.stale{background:var(--neg-soft);color:var(--neg)}
+
+/* ---------- expense list ---------- */
+.ex{display:flex;gap:12px;padding:12px 0;width:100%;text-align:left;align-items:center}
+.ex+.ex{border-top:1px solid var(--line)}
+.ex .ic{width:40px;height:40px;border-radius:11px;background:var(--surface-2);display:grid;place-items:center;font-size:17px;flex:none}
+.ex .t1{font-weight:620;font-size:15.5px}
+.ex .t2{font-size:12.5px;color:var(--muted);margin-top:2px}
+.ex .r1{font-weight:700;font-size:15.5px;text-align:right}
+.ex .r2{font-size:12px;color:var(--muted);text-align:right;margin-top:2px}
+.empty{text-align:center;color:var(--muted);padding:34px 16px;font-size:14.5px}
+
+/* ---------- bottom nav ---------- */
+.nav{
+  position:fixed;left:0;right:0;bottom:0;z-index:40;height:var(--nav-h);
+  padding-bottom:var(--safe-b);
+  background:color-mix(in srgb,var(--surface) 88%,transparent);
+  backdrop-filter:saturate(180%) blur(18px);-webkit-backdrop-filter:saturate(180%) blur(18px);
+  border-top:1px solid var(--line);
+  display:grid;grid-template-columns:repeat(5,1fr);align-items:center;
+}
+.nav button{height:58px;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:3px;color:var(--faint);font-size:10.5px;font-weight:650}
+.nav button .gi{font-size:20px;line-height:1}
+.nav button.on{color:var(--accent)}
+.nav .fab{position:relative}
+.nav .fab .disc{width:52px;height:52px;border-radius:17px;background:var(--accent);color:var(--accent-ink);display:grid;place-items:center;font-size:27px;font-weight:400;box-shadow:0 6px 18px -4px color-mix(in srgb,var(--accent) 60%,transparent);margin-top:-14px}
+
+/* ---------- sheet ---------- */
+.sheet{position:fixed;inset:0;z-index:60;display:none}
+.sheet.on{display:block}
+.sheet .scrim{position:absolute;inset:0;background:rgba(6,10,24,.5);animation:fade .2s}
+.sheet .panel{
+  position:absolute;left:0;right:0;bottom:0;max-height:94vh;overflow-y:auto;
+  -webkit-overflow-scrolling:touch;
+  background:var(--bg);border-radius:20px 20px 0 0;
+  padding:8px 16px calc(24px + var(--safe-b));
+  animation:up .26s cubic-bezier(.2,.8,.25,1);
+}
+@keyframes up{from{transform:translateY(100%)}to{transform:none}}
+.grab{width:38px;height:4px;border-radius:99px;background:var(--line);margin:6px auto 10px}
+.sheet-head{position:sticky;top:0;background:var(--bg);z-index:2;display:flex;align-items:center;gap:10px;padding:4px 0 12px}
+.sheet-head h2{font-size:19px;flex:1}
+
+/* ---------- misc ---------- */
+.banner{border-radius:12px;padding:11px 13px;font-size:13.5px;margin-bottom:12px;display:flex;gap:9px;align-items:flex-start}
+.banner.warn{background:var(--warn-soft);color:var(--warn)}
+.banner.bad{background:var(--neg-soft);color:var(--neg)}
+.banner.ok{background:var(--pos-soft);color:var(--pos)}
+.toast{position:fixed;left:16px;right:16px;bottom:calc(var(--nav-h) + 12px);z-index:90;background:var(--text);color:var(--bg);padding:13px 15px;border-radius:13px;font-size:14px;font-weight:600;box-shadow:0 10px 30px -8px rgba(0,0,0,.5);opacity:0;visibility:hidden;transform:translateY(24px) scale(.96);transition:opacity .2s,transform .26s cubic-bezier(.2,.8,.25,1),visibility .26s}
+.toast.on{opacity:1;visibility:visible;transform:none}
+.dot{width:8px;height:8px;border-radius:50%;background:var(--faint);flex:none}
+.dot.ok{background:var(--pos)} .dot.pend{background:var(--warn)} .dot.bad{background:var(--neg)}
+.itemrow{background:var(--surface-2);border-radius:12px;padding:10px;margin-bottom:8px}
+.split-line{display:flex;justify-content:space-between;font-size:13.5px;padding:5px 0;color:var(--muted)}
+.split-line b{color:var(--text);font-weight:650}
+.xfer{display:flex;align-items:center;gap:10px;padding:13px 0}
+.xfer+.xfer{border-top:1px solid var(--line)}
+.arrow{color:var(--faint);font-size:15px}
+</style>
+</head>
+<body>
+
+<!-- ============ SETUP ============ -->
+<section id="s-setup" class="screen">
+  <div class="topbar"><h1>Connect</h1></div>
+  <p class="sub">Paste the Web App URL and token from your Apps Script deployment. They are stored only on this device — nothing is committed to the public repo.</p>
+  <div class="card stack">
+    <div>
+      <label class="fl" for="cfgUrl">Apps Script /exec URL</label>
+      <input id="cfgUrl" type="text" inputmode="url" autocapitalize="off" autocorrect="off" spellcheck="false" placeholder="https://script.google.com/macros/s/.../exec">
+    </div>
+    <div>
+      <label class="fl" for="cfgToken">API token</label>
+      <input id="cfgToken" type="text" autocapitalize="off" autocorrect="off" spellcheck="false" placeholder="from showToken()">
+    </div>
+    <button class="btn primary full" id="cfgSave">Connect</button>
+  </div>
+  <div id="setupMsg"></div>
+  <p class="sub">Run <b>setup()</b> once in the Apps Script editor, deploy as a Web App (Execute as: Me · Who has access: Anyone), then run <b>showToken()</b>.</p>
+</section>
+
+<!-- ============ HOME ============ -->
+<section id="s-home" class="screen">
+  <div class="topbar">
+    <div class="grow">
+      <h1>Trip Split</h1>
+      <div style="font-size:12.5px;color:var(--muted);margin-top:1px">16 Oct – 1 Nov 2026 · Greater China</div>
+    </div>
+    <button class="iconbtn" id="syncBtn" title="Sync"><span id="syncIcon">⟳</span></button>
+  </div>
+
+  <div id="syncBanner"></div>
+
+  <div class="card">
+    <div class="row between" style="margin-bottom:4px">
+      <h3 style="font-size:15px">Net balance</h3>
+      <span class="tag mono" id="tripTotal">—</span>
+    </div>
+    <div id="balances"></div>
+  </div>
+
+  <div class="card tight">
+    <div class="row between">
+      <div>
+        <div style="font-size:13px;color:var(--muted)">Simplest way to settle</div>
+        <div id="settleHint" style="font-weight:650;margin-top:2px">Everyone is square</div>
+      </div>
+      <button class="btn sm ghost" data-go="settle">Settle up</button>
+    </div>
+  </div>
+
+  <div class="section-label">Recent</div>
+  <div class="card" id="recent"></div>
+</section>
+
+<!-- ============ HISTORY ============ -->
+<section id="s-history" class="screen">
+  <div class="topbar"><h1 class="grow">History</h1><span class="tag mono" id="histCount">0</span></div>
+  <div class="section-label" style="margin-top:4px">City</div>
+  <div class="chips" id="fCity"></div>
+  <div class="section-label">Person involved</div>
+  <div class="chips" id="fPerson"></div>
+  <div class="section-label">Results</div>
+  <div class="card" id="histList"></div>
+</section>
+
+<!-- ============ SETTLE ============ -->
+<section id="s-settle" class="screen">
+  <div class="topbar"><h1>Settle up</h1></div>
+  <p class="sub">The fewest transactions that clear every balance. Debts are chained through, so nobody pays a middleman.</p>
+  <div class="card" id="transfers"></div>
+  <div class="section-label">Settlement log</div>
+  <div class="card" id="settleLog"></div>
+</section>
+
+<!-- ============ MORE ============ -->
+<section id="s-more" class="screen">
+  <div class="topbar"><h1>Settings</h1></div>
+
+  <div class="section-label" style="margin-top:4px">Exchange rates · AUD per unit</div>
+  <div class="card" id="ratesBox"></div>
+  <button class="btn ghost full sm" id="refreshRates" style="margin-bottom:6px">Fetch today's live rates</button>
+  <p class="sub">Live rates come from open.er-api.com (Frankfurter as backup) and are cached in the ExchangeRates tab for the day. A manual override sticks until you clear it.</p>
+
+  <div class="section-label">People</div>
+  <div class="card stack" id="peopleBox"></div>
+
+  <div class="section-label">Connection</div>
+  <div class="card stack">
+    <div class="row between"><span style="font-size:14px;color:var(--muted)">Backend</span><span class="tag mono ellip" id="cfgUrlShown" style="max-width:60%">—</span></div>
+    <div class="row between"><span style="font-size:14px;color:var(--muted)">Unsynced changes</span><span class="tag mono" id="queueCount">0</span></div>
+    <button class="btn ghost full sm" id="forceSync">Sync now</button>
+    <button class="btn danger full sm" id="cfgClear">Disconnect this device</button>
+  </div>
+  <p class="sub">Every change is saved on this phone first and pushed when Google is reachable, so the app keeps working with no signal. Heads up: script.google.com is blocked in mainland China — expect the queue to hold in Guangzhou, Chongqing and Chengdu and flush over a VPN or back in Hong Kong.</p>
+</section>
+
+<!-- ============ NAV ============ -->
+<nav class="nav">
+  <button data-go="home" class="on"><span class="gi">◉</span>Home</button>
+  <button data-go="history"><span class="gi">☰</span>History</button>
+  <button class="fab" id="addBtn"><span class="disc">+</span></button>
+  <button data-go="settle"><span class="gi">⇄</span>Settle</button>
+  <button data-go="more"><span class="gi">⚙</span>More</button>
+</nav>
+
+<!-- ============ ADD / EDIT EXPENSE SHEET ============ -->
+<div class="sheet" id="exSheet">
+  <div class="scrim" data-close="exSheet"></div>
+  <div class="panel">
+    <div class="grab"></div>
+    <div class="sheet-head">
+      <h2 id="exTitle">New expense</h2>
+      <button class="btn sm ghost" data-close="exSheet">Cancel</button>
+    </div>
+
+    <div class="card stack">
+      <div>
+        <label class="fl">City</label>
+        <div class="chips" id="exCity"></div>
+      </div>
+      <div>
+        <label class="fl" for="exAmount">Amount · <span id="exCur">HKD</span></label>
+        <input id="exAmount" class="amount-in" type="text" inputmode="decimal" placeholder="0.00">
+        <div class="row between" style="margin-top:6px">
+          <span style="font-size:13px;color:var(--muted)" id="exAud">≈ A$0.00</span>
+          <span class="tag" id="exRateTag">—</span>
+        </div>
+      </div>
+      <div>
+        <label class="fl" for="exDesc">What for</label>
+        <input id="exDesc" type="text" placeholder="Dinner, taxi, tickets…">
+      </div>
+      <div>
+        <label class="fl">Paid by</label>
+        <div class="chips" id="exPaid"></div>
+      </div>
+      <div>
+        <label class="fl" for="exDate">Date</label>
+        <input id="exDate" type="date">
+      </div>
+    </div>
+
+    <div class="section-label">Split</div>
+    <div class="seg" id="exSplitType">
+      <button data-st="equal" class="on">Equal</button>
+      <button data-st="exact">Exact</button>
+      <button data-st="percent">%</button>
+      <button data-st="itemized">Items</button>
+    </div>
+
+    <div class="card" id="exSplitBody" style="margin-top:12px"></div>
+    <div class="card tight" id="exPreview"></div>
+
+    <button class="btn primary full" id="exSave" style="margin-top:6px">Save expense</button>
+    <button class="btn danger full sm" id="exDelete" style="margin-top:8px;display:none">Delete expense</button>
+  </div>
+</div>
+
+<!-- ============ EXPENSE DETAIL SHEET ============ -->
+<div class="sheet" id="detSheet">
+  <div class="scrim" data-close="detSheet"></div>
+  <div class="panel">
+    <div class="grab"></div>
+    <div class="sheet-head"><h2 id="detTitle">Expense</h2><button class="btn sm ghost" data-close="detSheet">Close</button></div>
+    <div id="detBody"></div>
+  </div>
+</div>
+
+<!-- ============ RATE OVERRIDE SHEET ============ -->
+<div class="sheet" id="rateSheet">
+  <div class="scrim" data-close="rateSheet"></div>
+  <div class="panel">
+    <div class="grab"></div>
+    <div class="sheet-head"><h2 id="rateTitle">Rate</h2><button class="btn sm ghost" data-close="rateSheet">Close</button></div>
+    <div class="card stack">
+      <div>
+        <label class="fl" id="rateLbl">AUD per unit</label>
+        <input id="rateVal" type="text" inputmode="decimal" class="amount-in">
+      </div>
+      <div style="font-size:13px;color:var(--muted)" id="rateHelp"></div>
+      <button class="btn primary full" id="rateSave">Save as manual override</button>
+      <button class="btn ghost full sm" id="rateClear">Clear override, use live rate</button>
+    </div>
+  </div>
+</div>
+
+<!-- ============ SETTLE CONFIRM SHEET ============ -->
+<div class="sheet" id="paySheet">
+  <div class="scrim" data-close="paySheet"></div>
+  <div class="panel">
+    <div class="grab"></div>
+    <div class="sheet-head"><h2>Mark as settled</h2><button class="btn sm ghost" data-close="paySheet">Cancel</button></div>
+    <div class="card stack">
+      <div id="payWho" style="font-size:16px;font-weight:650"></div>
+      <div>
+        <label class="fl" for="payAmt">Amount settled · AUD</label>
+        <input id="payAmt" type="text" inputmode="decimal" class="amount-in">
+      </div>
+      <div>
+        <label class="fl" for="payNote">Note</label>
+        <input id="payNote" type="text" placeholder="Bank transfer, cash…">
+      </div>
+      <button class="btn primary full" id="paySave">Log settlement</button>
+    </div>
+  </div>
+</div>
+
+<div class="toast" id="toast"></div>
+<script>
+"use strict";
+/* ============================================================
+   Trip Split — vanilla SPA. Local-first: every change is written
+   to localStorage and queued, then pushed to Apps Script when
+   reachable. The UI never waits on the network.
+   ============================================================ */
+
+const CITIES = [
+  { name:'Hong Kong', cur:'HKD' },
+  { name:'Macau',     cur:'MOP' },
+  { name:'Guangzhou', cur:'CNY' },
+  { name:'Chongqing', cur:'CNY' },
+  { name:'Chengdu',   cur:'CNY' },
+  { name:'Sydney',    cur:'AUD' }
+];
+const SYM  = { AUD:'A$', HKD:'HK$', MOP:'MOP$', CNY:'¥' };
+const CURS = ['AUD','HKD','MOP','CNY'];
+const K_CFG='tsplit.cfg', K_STATE='tsplit.state', K_QUEUE='tsplit.queue', K_PREFS='tsplit.prefs';
+
+let CFG   = load(K_CFG,   null);
+let S     = load(K_STATE, { people:[], expenses:[], rates:[], settlements:[] });
+let QUEUE = load(K_QUEUE, []);
+let PREFS = load(K_PREFS, { lastCity:'Hong Kong' });
+let syncing = false, lastSyncErr = '';
+
+function load(k, d){ try{ const v=localStorage.getItem(k); return v?JSON.parse(v):d; }catch(e){ return d; } }
+function save(k, v){ try{ localStorage.setItem(k, JSON.stringify(v)); }catch(e){} }
+const $  = s => document.querySelector(s);
+const $$ = s => Array.from(document.querySelectorAll(s));
+const esc = s => String(s==null?'':s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+
+/* ---------------- money ---------------- */
+const cents  = n => Math.round((Number(n)||0)*100);
+const money  = c => (c/100);
+const fmtAud = n => 'A$' + (Math.abs(n) < 0.005 ? '0.00' : Number(n).toFixed(2));
+const fmtAudC= c => fmtAud(money(c));
+const fmtCur = (n,cur) => (SYM[cur]||cur+' ') + Number(n||0).toFixed(2);
+function rateOf(cur){
+  if (cur === 'AUD') return 1;
+  const r = (S.rates||[]).find(x => x.currency === cur);
+  return r && r.rate_to_aud > 0 ? Number(r.rate_to_aud) : 0;
+}
+function rateMeta(cur){
+  if (cur === 'AUD') return { rate:1, manual:false, stale:false, missing:false };
+  const r = (S.rates||[]).find(x => x.currency === cur);
+  if (!r || !(r.rate_to_aud > 0)) return { rate:0, manual:false, stale:true, missing:true };
+  const day = String(r.last_updated||'').slice(0,10);
+  return { rate:Number(r.rate_to_aud), manual:!!r.is_manual_override,
+           stale:!r.is_manual_override && day !== today(), missing:false, day };
+}
+function today(){ const d=new Date(); return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0'); }
+
+/** Split `totalC` cents across `weights` ({name:weight}) so the parts sum exactly. */
+function allocate(totalC, weights){
+  const names = Object.keys(weights).filter(n => Number(weights[n]) > 0);
+  const out = {};
+  if (!names.length){
+    const all = Object.keys(weights);
+    if (!all.length) return out;
+    const base = Math.floor(totalC/all.length);
+    all.forEach((n,i) => out[n] = base + (i < totalC - base*all.length ? 1 : 0));
+    return out;
+  }
+  const sum = names.reduce((a,n) => a + Number(weights[n]), 0);
+  let used = 0;
+  const frac = [];
+  names.forEach(n => {
+    const raw = Number(weights[n]) / sum * totalC;
+    const fl  = Math.floor(raw);
+    out[n] = fl; used += fl; frac.push([n, raw - fl]);
+  });
+  frac.sort((a,b) => b[1] - a[1]);
+  let left = totalC - used;
+  for (let i = 0; left > 0; i++, left--) out[frac[i % frac.length][0]]++;
+  return out;
+}
+
+/** Per-person share of one expense, in AUD cents. Always sums to amount_aud. */
+function sharesOf(ex){
+  const totalC = cents(ex.amount_aud);
+  const people = S.people.length ? S.people : [];
+  const d = ex.split_detail || {};
+  let weights = {};
+
+  if (ex.split_type === 'exact' || ex.split_type === 'percent'){
+    const sh = d.shares || {};
+    Object.keys(sh).forEach(n => { if (Number(sh[n]) > 0) weights[n] = Number(sh[n]); });
+  } else if (ex.split_type === 'itemized'){
+    const pack = ex.items || {};
+    const items = pack.items || [];
+    const per = {};
+    let itemsTotal = 0;
+    items.forEach(it => {
+      const amt = Number(it.amount) || 0;
+      const who = (it.people || []).filter(Boolean);
+      if (!amt || !who.length) return;
+      itemsTotal += amt;
+      who.forEach(n => per[n] = (per[n] || 0) + amt / who.length);
+    });
+    const extra = Number(pack.extra) || 0;
+    if (extra && itemsTotal > 0){
+      Object.keys(per).forEach(n => per[n] += extra * (per[n] / itemsTotal));
+    } else if (extra){
+      const who = Object.keys(per).length ? Object.keys(per) : people;
+      who.forEach(n => per[n] = (per[n] || 0) + extra / who.length);
+    }
+    weights = per;
+  } else {
+    const parts = (d.participants && d.participants.length) ? d.participants : people;
+    parts.forEach(n => weights[n] = 1);
+  }
+  if (!Object.keys(weights).length) people.forEach(n => weights[n] = 1);
+  return allocate(totalC, weights);
+}
+
+/** Net balance per person in AUD cents. Positive = owed money. */
+function balances(){
+  const b = {};
+  S.people.forEach(n => b[n] = 0);
+  (S.expenses||[]).forEach(ex => {
+    if (b[ex.paid_by] === undefined) b[ex.paid_by] = 0;
+    b[ex.paid_by] += cents(ex.amount_aud);
+    const sh = sharesOf(ex);
+    Object.keys(sh).forEach(n => { b[n] = (b[n]||0) - sh[n]; });
+  });
+  (S.settlements||[]).forEach(st => {
+    const a = cents(st.amount_aud);
+    b[st.from] = (b[st.from]||0) + a;
+    b[st.to]   = (b[st.to]  ||0) - a;
+  });
+  return b;
+}
+
+/**
+ * Fewest transactions that clear every balance: repeatedly match the biggest
+ * debtor to the biggest creditor. With three people this is provably minimal
+ * (at most two transfers), and the chain A→B→C collapses to A→C.
+ */
+function simplify(b){
+  const cr = [], db = [];
+  Object.keys(b).forEach(n => {
+    const v = b[n];
+    if (v > 0)      cr.push({ n, v:v });
+    else if (v < 0) db.push({ n, v:-v });
+  });
+  cr.sort((x,y) => y.v - x.v); db.sort((x,y) => y.v - x.v);
+  const out = [];
+  let i = 0, j = 0;
+  while (i < db.length && j < cr.length){
+    const amt = Math.min(db[i].v, cr[j].v);
+    if (amt > 0) out.push({ from: db[i].n, to: cr[j].n, c: amt });
+    db[i].v -= amt; cr[j].v -= amt;
+    if (db[i].v <= 0) i++;
+    if (cr[j].v <= 0) j++;
+  }
+  return out.filter(t => t.c > 0);
+}
+
+/* ---------------- API + offline queue ---------------- */
+
+async function call(action, payload, opts){
+  if (!CFG || !CFG.url) throw new Error('Not connected');
+  const url = CFG.url + (CFG.url.includes('?') ? '&' : '?') + 'v=' + Date.now();
+  const res = await fetch(url, {
+    method:'POST',
+    // text/plain keeps this a CORS "simple request" — Apps Script cannot answer preflight.
+    headers:{ 'Content-Type':'text/plain;charset=utf-8' },
+    body: JSON.stringify(Object.assign({ token:CFG.token, action, payload }, opts||{})),
+    redirect:'follow'
+  });
+  const txt = await res.text();
+  let data;
+  try { data = JSON.parse(txt); }
+  catch(e){ throw new Error('Backend returned non-JSON — check the deployment is set to "Anyone" access.'); }
+  if (!data.ok) throw new Error(data.error || 'Request failed');
+  return data;
+}
+
+function enqueue(action, payload){
+  QUEUE.push({ qid:'q'+Date.now()+Math.random().toString(36).slice(2,6), action, payload });
+  save(K_QUEUE, QUEUE);
+  renderSync();
+  sync();
+}
+
+function persist(){ save(K_STATE, S); }
+
+async function sync(force){
+  if (syncing || !CFG || !CFG.url) return;
+  syncing = true; lastSyncErr = ''; renderSync();
+  try {
+    while (QUEUE.length){
+      const job = QUEUE[0];
+      await call(job.action, job.payload);
+      QUEUE.shift(); save(K_QUEUE, QUEUE); renderSync();
+    }
+    const d = await call('bootstrap', {}, { refreshRates: !!force });
+    S = { people:d.people||[], expenses:d.expenses||[], rates:d.rates||[],
+          settlements:d.settlements||[], serverDate:d.serverDate||'' };
+    persist();
+    renderAll();
+  } catch(err){
+    lastSyncErr = (err instanceof TypeError)
+      ? "Can't reach Google right now — everything is saved on this phone."
+      : (err.message || String(err));
+  } finally {
+    syncing = false; renderSync();
+  }
+}
+
+/* ---------------- shell ---------------- */
+
+function go(name){
+  $$('.screen').forEach(s => s.classList.remove('on'));
+  const el = $('#s-' + name);
+  if (el) el.classList.add('on');
+  $$('.nav button[data-go]').forEach(b => b.classList.toggle('on', b.dataset.go === name));
+  window.scrollTo(0,0);
+  if (name === 'history') renderHistory();
+  if (name === 'settle')  renderSettle();
+  if (name === 'more')    renderMore();
+}
+function openSheet(id){ $('#'+id).classList.add('on'); document.body.style.overflow='hidden'; }
+function closeSheet(id){ $('#'+id).classList.remove('on'); document.body.style.overflow=''; }
+let toastT;
+function toast(msg){
+  const t = $('#toast'); t.textContent = msg; t.classList.add('on');
+  clearTimeout(toastT); toastT = setTimeout(() => t.classList.remove('on'), 2400);
+}
+const initials = n => String(n||'?').trim().split(/\s+/).map(w=>w[0]).join('').slice(0,2).toUpperCase();
+
+/* ---------------- render: home ---------------- */
+
+function renderSync(){
+  const q = QUEUE.length;
+  const el = $('#syncBanner');
+  $('#queueCount') && ($('#queueCount').textContent = q);
+  $('#syncIcon') && ($('#syncIcon').style.opacity = syncing ? '.4' : '1');
+  if (!el) return;
+  if (q && lastSyncErr){
+    el.innerHTML = `<div class="banner warn"><span class="dot pend"></span><div><b>${q} change${q>1?'s':''} waiting to sync.</b> ${esc(lastSyncErr)}</div></div>`;
+  } else if (q){
+    el.innerHTML = `<div class="banner warn"><span class="dot pend"></span><div>${q} change${q>1?'s':''} queued — pushing to the Sheet.</div></div>`;
+  } else if (lastSyncErr){
+    el.innerHTML = `<div class="banner bad"><span class="dot bad"></span><div>${esc(lastSyncErr)}</div></div>`;
+  } else {
+    el.innerHTML = '';
+  }
+}
+
+function renderHome(){
+  const b = balances();
+  const names = S.people.length ? S.people : Object.keys(b);
+  $('#balances').innerHTML = names.length ? names.map(n => {
+    const v = b[n] || 0;
+    const cls = v > 0 ? 'pos' : v < 0 ? 'neg' : 'zero';
+    const lbl = v > 0 ? 'is owed' : v < 0 ? 'owes' : 'square';
+    return `<div class="bal">
+      <div class="av">${esc(initials(n))}</div>
+      <div class="grow"><div style="font-weight:650">${esc(n)}</div>
+        <div style="font-size:12.5px;color:var(--muted)">${lbl}</div></div>
+      <div class="amt mono ${cls}">${v===0?'—':fmtAudC(Math.abs(v))}</div>
+    </div>`;
+  }).join('') : `<div class="empty">Add people in Settings.</div>`;
+
+  const total = (S.expenses||[]).reduce((a,e) => a + cents(e.amount_aud), 0);
+  $('#tripTotal').textContent = fmtAudC(total) + ' spent';
+
+  const tx = simplify(b);
+  $('#settleHint').textContent = !tx.length
+    ? 'Everyone is square'
+    : tx.length === 1
+      ? `${tx[0].from} → ${tx[0].to} · ${fmtAudC(tx[0].c)}`
+      : `${tx.length} transfers clear it`;
+
+  const recent = (S.expenses||[]).slice().sort(byDateDesc).slice(0,6);
+  $('#recent').innerHTML = recent.length ? recent.map(exRow).join('')
+    : `<div class="empty">No expenses yet.<br>Tap <b>+</b> to add the first one.</div>`;
+}
+
+function byDateDesc(a,b){
+  if (a.date === b.date) return String(b.id).localeCompare(String(a.id));
+  return String(b.date).localeCompare(String(a.date));
+}
+
+function exRow(ex){
+  const me = ex.currency !== 'AUD';
+  return `<button class="ex" data-ex="${esc(ex.id)}">
+    <div class="ic">${esc(cityIcon(ex.city))}</div>
+    <div class="grow">
+      <div class="t1 ellip">${esc(ex.description || 'Expense')}</div>
+      <div class="t2 ellip">${esc(ex.date)} · ${esc(ex.city||'—')} · ${esc(ex.paid_by)} paid · ${esc(splitLabel(ex.split_type))}</div>
+    </div>
+    <div>
+      <div class="r1 mono">${me ? fmtCur(ex.amount_local, ex.currency) : fmtAud(ex.amount_aud)}</div>
+      ${me ? `<div class="r2 mono">${fmtAud(ex.amount_aud)}</div>` : ``}
+    </div>
+  </button>`;
+}
+function cityIcon(c){
+  return ({ 'Hong Kong':'HK','Macau':'MO','Guangzhou':'GZ','Chongqing':'CQ','Chengdu':'CD','Sydney':'SYD' })[c] || '··';
+}
+function splitLabel(t){
+  return ({ equal:'equal', exact:'exact', percent:'%', itemized:'itemized' })[t] || t;
+}
+
+/* ---------------- render: history ---------------- */
+
+let HF = { city:'', person:'' };
+
+function renderHistory(){
+  const cities = Array.from(new Set((S.expenses||[]).map(e => e.city).filter(Boolean)));
+  $('#fCity').innerHTML = [['','All cities']].concat(cities.map(c => [c,c]))
+    .map(([v,l]) => `<button class="chip ${HF.city===v?'on':''}" data-fc="${esc(v)}">${esc(l)}</button>`).join('');
+  $('#fPerson').innerHTML = [['','Everyone']].concat(S.people.map(p => [p,p]))
+    .map(([v,l]) => `<button class="chip ${HF.person===v?'on':''}" data-fp="${esc(v)}">${esc(l)}</button>`).join('');
+
+  const list = (S.expenses||[]).filter(ex => {
+    if (HF.city && ex.city !== HF.city) return false;
+    if (HF.person){
+      if (ex.paid_by === HF.person) return true;
+      const sh = sharesOf(ex);
+      return (sh[HF.person] || 0) > 0;
+    }
+    return true;
+  }).sort(byDateDesc);
+
+  const sum = list.reduce((a,e) => a + cents(e.amount_aud), 0);
+  $('#histCount').textContent = list.length + ' · ' + fmtAudC(sum);
+  $('#histList').innerHTML = list.length ? list.map(exRow).join('')
+    : `<div class="empty">Nothing matches that filter.</div>`;
+}
+
+/* ---------------- render: settle ---------------- */
+
+function renderSettle(){
+  const b = balances();
+  const tx = simplify(b);
+  $('#transfers').innerHTML = tx.length ? tx.map((t,i) => `
+    <div class="xfer">
+      <div class="av">${esc(initials(t.from))}</div>
+      <div class="grow">
+        <div style="font-weight:650">${esc(t.from)} <span class="arrow">→</span> ${esc(t.to)}</div>
+        <div style="font-size:12.5px;color:var(--muted)">transfer ${fmtAudC(t.c)}</div>
+      </div>
+      <button class="btn sm primary" data-pay="${i}">Settle</button>
+    </div>`).join('')
+    : `<div class="empty">All square — no transfers needed.</div>`;
+  window.__tx = tx;
+
+  const log = (S.settlements||[]).slice().sort(byDateDesc);
+  $('#settleLog').innerHTML = log.length ? log.map(st => `
+    <div class="xfer">
+      <div class="ic" style="width:40px;height:40px;border-radius:11px;background:var(--surface-2);display:grid;place-items:center">✓</div>
+      <div class="grow">
+        <div style="font-weight:620">${esc(st.from)} <span class="arrow">→</span> ${esc(st.to)}</div>
+        <div style="font-size:12.5px;color:var(--muted)">${esc(st.date)}${st.note?' · '+esc(st.note):''}</div>
+      </div>
+      <div style="text-align:right">
+        <div class="mono" style="font-weight:700">${fmtAud(st.amount_aud)}</div>
+        <button class="btn sm ghost" style="margin-top:4px" data-unsettle="${esc(st.id)}">Undo</button>
+      </div>
+    </div>`).join('')
+    : `<div class="empty">No settlements logged.</div>`;
+}
+
+/* ---------------- render: more ---------------- */
+
+function renderMore(){
+  $('#ratesBox').innerHTML = CURS.map(c => {
+    const m = rateMeta(c);
+    const tag = c === 'AUD' ? '<span class="tag">base</span>'
+      : m.missing ? '<span class="tag stale">no rate</span>'
+      : m.manual  ? '<span class="tag manual">manual</span>'
+      : m.stale   ? '<span class="tag stale">stale</span>'
+      : '<span class="tag live">live</span>';
+    const sub = c === 'AUD' ? 'always 1.0000'
+      : m.missing ? 'tap to set one manually'
+      : `1 ${c} = ${m.rate.toFixed(4)} AUD · ${m.manual ? 'your rate' : (m.day || 'unknown date')}`;
+    return `<div class="bal" ${c==='AUD'?'':`data-rate="${c}"`} style="${c==='AUD'?'':'cursor:pointer'}">
+      <div class="av">${SYM[c]}</div>
+      <div class="grow"><div style="font-weight:650">${c}</div>
+        <div style="font-size:12.5px;color:var(--muted)">${esc(sub)}</div></div>
+      ${tag}
+    </div>`;
+  }).join('');
+
+  $('#peopleBox').innerHTML = S.people.map((p,i) =>
+    `<div class="row"><input type="text" data-person="${i}" value="${esc(p)}"></div>`).join('')
+    + `<button class="btn ghost full sm" id="savePeople">Save names</button>`;
+
+  $('#cfgUrlShown').textContent = CFG && CFG.url ? CFG.url.replace(/^https:\/\//,'').slice(0,34) + '…' : '—';
+  $('#queueCount').textContent = QUEUE.length;
+}
+
+function renderAll(){ renderHome(); renderSync();
+  if ($('#s-history').classList.contains('on')) renderHistory();
+  if ($('#s-settle').classList.contains('on'))  renderSettle();
+  if ($('#s-more').classList.contains('on'))    renderMore();
+}
+
+/* ============================================================
+   Add / edit expense
+   ============================================================ */
+
+let F = null;
+
+function newForm(){
+  const city = PREFS.lastCity || 'Hong Kong';
+  return {
+    id:null, date:today(), city, cur:curOf(city), amount:'', desc:'',
+    paid_by: S.people[0] || '', split_type:'equal',
+    participants: S.people.slice(), exact:{}, percent:{},
+    items:[{ name:'', amount:'', people:S.people.slice() }], extra:''
+  };
+}
+const curOf = city => (CITIES.find(c => c.name === city) || { cur:'AUD' }).cur;
+
+function openAdd(){
+  if (!S.people.length){ toast('Add people in Settings first'); go('more'); return; }
+  F = newForm();
+  $('#exTitle').textContent = 'New expense';
+  $('#exDelete').style.display = 'none';
+  renderForm();
+  openSheet('exSheet');
+}
+
+function openEdit(id){
+  const ex = (S.expenses||[]).find(e => String(e.id) === String(id));
+  if (!ex) return;
+  const d = ex.split_detail || {};
+  const pack = ex.items || {};
+  F = {
+    id: ex.id, date: ex.date, city: ex.city, cur: ex.currency,
+    amount: String(ex.amount_local), desc: ex.description, paid_by: ex.paid_by,
+    split_type: ex.split_type || 'equal',
+    participants: (d.participants && d.participants.length) ? d.participants.slice() : S.people.slice(),
+    exact:   ex.split_type === 'exact'   ? Object.assign({}, d.shares) : {},
+    percent: ex.split_type === 'percent' ? Object.assign({}, d.shares) : {},
+    items:   (pack.items && pack.items.length)
+               ? pack.items.map(i => ({ name:i.name, amount:String(i.amount), people:(i.people||[]).slice() }))
+               : [{ name:'', amount:'', people:S.people.slice() }],
+    extra:   pack.extra ? String(pack.extra) : ''
+  };
+  $('#exTitle').textContent = 'Edit expense';
+  $('#exDelete').style.display = '';
+  renderForm();
+  openSheet('exSheet');
+}
+
+function itemsTotal(){
+  const it = F.items.reduce((a,i) => a + (Number(i.amount) || 0), 0);
+  return it + (Number(F.extra) || 0);
+}
+function formAmount(){
+  return F.split_type === 'itemized' ? itemsTotal() : (Number(F.amount) || 0);
+}
+
+function renderForm(){
+  $('#exCity').innerHTML = CITIES.map(c =>
+    `<button class="chip ${F.city===c.name?'on':''}" data-city="${esc(c.name)}">${esc(c.name)}<small>${c.cur}</small></button>`).join('');
+  $('#exPaid').innerHTML = S.people.map(p =>
+    `<button class="chip ${F.paid_by===p?'on':''}" data-paid="${esc(p)}">${esc(p)}</button>`).join('');
+  $('#exCur').textContent = F.cur;
+  $('#exDesc').value = F.desc;
+  $('#exDate').value = F.date;
+
+  const amtEl = $('#exAmount');
+  if (F.split_type === 'itemized'){
+    amtEl.value = itemsTotal() ? itemsTotal().toFixed(2) : '';
+    amtEl.readOnly = true; amtEl.style.opacity = '.75';
+  } else {
+    if (document.activeElement !== amtEl) amtEl.value = F.amount;
+    amtEl.readOnly = false; amtEl.style.opacity = '1';
+  }
+
+  const m = rateMeta(F.cur);
+  $('#exAud').textContent = '≈ ' + fmtAud(formAmount() * (m.rate || 0));
+  $('#exRateTag').className = 'tag ' + (F.cur==='AUD' ? '' : m.missing||m.stale ? 'stale' : m.manual ? 'manual' : 'live');
+  $('#exRateTag').textContent = F.cur === 'AUD' ? 'base'
+    : m.missing ? 'no rate' : `1 ${F.cur} = ${m.rate.toFixed(4)} · ${m.manual?'manual':'live'}`;
+
+  $$('#exSplitType button').forEach(b => b.classList.toggle('on', b.dataset.st === F.split_type));
+  renderSplitBody();
+  renderPreview();
+}
+
+function renderSplitBody(){
+  const box = $('#exSplitBody');
+  const t = F.split_type;
+
+  if (t === 'equal'){
+    box.innerHTML = `<label class="fl">Split between</label>
+      <div class="chips">${S.people.map(p =>
+        `<button class="chip ${F.participants.includes(p)?'on':''}" data-part="${esc(p)}">${esc(p)}</button>`).join('')}</div>`;
+
+  } else if (t === 'exact' || t === 'percent'){
+    const bag = t === 'exact' ? F.exact : F.percent;
+    const unit = t === 'exact' ? F.cur : '%';
+    const target = t === 'exact' ? formAmount() : 100;
+    const got = S.people.reduce((a,p) => a + (Number(bag[p]) || 0), 0);
+    const left = target - got;
+    box.innerHTML = `<label class="fl">${t === 'exact' ? 'Exact amounts · '+F.cur : 'Percentages'}</label>
+      ${S.people.map(p => `
+        <div class="row" style="margin-bottom:8px">
+          <div class="av">${esc(initials(p))}</div>
+          <div class="grow" style="font-weight:620">${esc(p)}</div>
+          <input type="text" inputmode="decimal" data-share="${esc(p)}" value="${esc(bag[p]!=null?bag[p]:'')}"
+                 placeholder="0" style="width:110px;text-align:right">
+        </div>`).join('')}
+      <div class="split-line" style="border-top:1px solid var(--line);padding-top:9px">
+        <span>${Math.abs(left) < 0.005 ? 'Balanced' : (left > 0 ? 'Still to assign' : 'Over by')}</span>
+        <b class="mono ${Math.abs(left)<0.005?'pos':'neg'}">${Math.abs(left).toFixed(2)} ${esc(unit)}</b>
+      </div>
+      <button class="btn ghost full sm" id="evenUp" style="margin-top:8px">Even it up</button>`;
+
+  } else {
+    box.innerHTML = `<label class="fl">Line items · ${esc(F.cur)}</label>
+      ${F.items.map((it,i) => `
+        <div class="itemrow">
+          <div class="row" style="margin-bottom:8px">
+            <input type="text" data-iname="${i}" value="${esc(it.name)}" placeholder="Item" class="grow">
+            <input type="text" inputmode="decimal" data-iamt="${i}" value="${esc(it.amount)}" placeholder="0.00" style="width:96px;text-align:right">
+            <button class="iconbtn" data-idel="${i}" title="Remove">×</button>
+          </div>
+          <div class="chips">${S.people.map(p =>
+            `<button class="chip sm ${it.people.includes(p)?'on':''}" data-ip="${i}:${esc(p)}"
+                     style="min-height:38px;padding:0 12px;font-size:13.5px">${esc(p)}</button>`).join('')}</div>
+        </div>`).join('')}
+      <button class="btn ghost full sm" id="addItem" style="margin-bottom:12px">+ Add line item</button>
+      <label class="fl" for="exExtra">Tax, tip &amp; service · ${esc(F.cur)}</label>
+      <input id="exExtra" type="text" inputmode="decimal" value="${esc(F.extra)}" placeholder="0.00">
+      <div class="split-line" style="border-top:1px solid var(--line);padding-top:9px;margin-top:10px">
+        <span>Receipt total</span><b class="mono">${fmtCur(itemsTotal(), F.cur)}</b>
+      </div>
+      <div style="font-size:12.5px;color:var(--muted);margin-top:4px">Tax and tip are prorated across whoever is on the receipt, weighted by what they ordered.</div>`;
+  }
+}
+
+/** Build the expense object the form currently describes. */
+function draftExpense(){
+  const amt = formAmount();
+  const rate = rateOf(F.cur);
+  const ex = {
+    id: F.id, date: F.date, city: F.city, description: F.desc.trim(),
+    paid_by: F.paid_by, currency: F.cur,
+    amount_local: round2(amt),
+    amount_aud: round2(amt * rate),
+    split_type: F.split_type,
+    split_detail: {}, items: null
+  };
+  if (F.split_type === 'equal'){
+    ex.split_detail = { participants: F.participants.slice() };
+  } else if (F.split_type === 'exact'){
+    ex.split_detail = { shares: numBag(F.exact) };
+  } else if (F.split_type === 'percent'){
+    ex.split_detail = { shares: numBag(F.percent) };
+  } else {
+    const items = F.items
+      .filter(i => (Number(i.amount) || 0) > 0 && i.people.length)
+      .map(i => ({ name:i.name.trim() || 'Item', amount:round2(Number(i.amount)), people:i.people.slice() }));
+    ex.items = { items, extra: round2(Number(F.extra) || 0) };
+    ex.split_detail = { participants: Array.from(new Set(items.flatMap(i => i.people))) };
+  }
+  return ex;
+}
+const round2 = n => Math.round((Number(n)||0)*100)/100;
+function numBag(o){
+  const out = {};
+  Object.keys(o).forEach(k => { const v = Number(o[k]); if (v > 0) out[k] = round2(v); });
+  return out;
+}
+
+function renderPreview(){
+  const ex = draftExpense();
+  const rate = rateOf(F.cur);
+  if (!ex.amount_local){ $('#exPreview').innerHTML = `<div style="color:var(--muted);font-size:13.5px">Enter an amount to see the split.</div>`; return; }
+  if (!rate){ $('#exPreview').innerHTML = `<div class="banner bad" style="margin:0">No exchange rate for ${esc(F.cur)}. Set one in Settings before saving.</div>`; return; }
+  const sh = sharesOf(ex);
+  const rows = S.people.map(p => {
+    const c = sh[p] || 0;
+    const local = ex.amount_local ? (c / cents(ex.amount_aud) * ex.amount_local) : 0;
+    return `<div class="split-line"><span>${esc(p)}${p===ex.paid_by?' · paid':''}</span>
+      <b class="mono">${fmtAudC(c)}${F.cur!=='AUD' && c ? ` <span style="color:var(--muted);font-weight:500">(${fmtCur(local,F.cur)})</span>`:''}</b></div>`;
+  }).join('');
+  $('#exPreview').innerHTML = `<label class="fl">Each person owes</label>${rows}`;
+}
+
+function validate(ex){
+  if (!ex.paid_by) return 'Pick who paid';
+  if (!(ex.amount_local > 0)) return 'Enter an amount';
+  if (!rateOf(ex.currency)) return `No exchange rate for ${ex.currency}`;
+  if (ex.split_type === 'equal' && !(ex.split_detail.participants||[]).length) return 'Pick at least one person to split between';
+  if (ex.split_type === 'exact'){
+    const s = Object.values(ex.split_detail.shares||{}).reduce((a,b)=>a+b,0);
+    if (Math.abs(s - ex.amount_local) > 0.02) return `Exact amounts add to ${s.toFixed(2)}, not ${ex.amount_local.toFixed(2)}`;
+  }
+  if (ex.split_type === 'percent'){
+    const s = Object.values(ex.split_detail.shares||{}).reduce((a,b)=>a+b,0);
+    if (Math.abs(s - 100) > 0.05) return `Percentages add to ${s.toFixed(2)}%, not 100%`;
+  }
+  if (ex.split_type === 'itemized' && !(ex.items.items||[]).length) return 'Add at least one line item with an amount and a person';
+  return '';
+}
+
+function saveExpense(){
+  const ex = draftExpense();
+  const err = validate(ex);
+  if (err){ toast(err); return; }
+  if (!ex.description) ex.description = ex.city ? ex.city + ' expense' : 'Expense';
+
+  const isNew = !ex.id;
+  if (ex.id){
+    S.expenses = S.expenses.map(e => String(e.id) === String(ex.id) ? ex : e);
+    enqueue('updateExpense', ex);
+  } else {
+    ex.id = 'e' + Date.now() + Math.floor(Math.random()*1000);
+    S.expenses.push(ex);
+    enqueue('addExpense', ex);
+  }
+  PREFS.lastCity = ex.city; save(K_PREFS, PREFS);
+  persist(); renderAll();
+  closeSheet('exSheet');
+  toast(isNew ? 'Added' : 'Saved');
+}
+
+function deleteExpense(){
+  if (!F.id) return;
+  S.expenses = S.expenses.filter(e => String(e.id) !== String(F.id));
+  enqueue('deleteExpense', { id:F.id });
+  persist(); renderAll(); closeSheet('exSheet'); toast('Deleted');
+}
+
+/* ---------------- expense detail ---------------- */
+
+function openDetail(id){
+  const ex = (S.expenses||[]).find(e => String(e.id) === String(id));
+  if (!ex) return;
+  const sh = sharesOf(ex);
+  const rate = ex.amount_local ? ex.amount_aud / ex.amount_local : 0;
+  $('#detTitle').textContent = ex.description || 'Expense';
+  const itemHtml = (ex.items && ex.items.items && ex.items.items.length) ? `
+    <div class="section-label">Line items</div>
+    <div class="card">
+      ${ex.items.items.map(i => `<div class="split-line"><span>${esc(i.name)} · ${esc((i.people||[]).join(', '))}</span><b class="mono">${fmtCur(i.amount, ex.currency)}</b></div>`).join('')}
+      ${ex.items.extra ? `<div class="split-line" style="border-top:1px solid var(--line);padding-top:8px"><span>Tax / tip, prorated</span><b class="mono">${fmtCur(ex.items.extra, ex.currency)}</b></div>` : ''}
+    </div>` : '';
+  $('#detBody').innerHTML = `
+    <div class="card">
+      <div class="row between"><span style="color:var(--muted);font-size:14px">Total</span>
+        <b class="mono" style="font-size:19px">${fmtCur(ex.amount_local, ex.currency)}</b></div>
+      <div class="row between" style="margin-top:4px"><span style="color:var(--muted);font-size:14px">In AUD</span>
+        <b class="mono">${fmtAud(ex.amount_aud)}</b></div>
+      <div class="hr"></div>
+      <div class="split-line"><span>Date</span><b>${esc(ex.date)}</b></div>
+      <div class="split-line"><span>City</span><b>${esc(ex.city||'—')}</b></div>
+      <div class="split-line"><span>Paid by</span><b>${esc(ex.paid_by)}</b></div>
+      <div class="split-line"><span>Split</span><b>${esc(splitLabel(ex.split_type))}</b></div>
+      <div class="split-line"><span>Rate used</span><b class="mono">1 ${esc(ex.currency)} = ${rate ? rate.toFixed(4) : '—'} AUD</b></div>
+    </div>
+    ${itemHtml}
+    <div class="section-label">Share</div>
+    <div class="card">${S.people.map(p => `<div class="split-line"><span>${esc(p)}</span><b class="mono">${fmtAudC(sh[p]||0)}</b></div>`).join('')}</div>
+    <button class="btn primary full" data-editex="${esc(ex.id)}">Edit</button>`;
+  openSheet('detSheet');
+}
+
+/* ---------------- rates ---------------- */
+
+let rateCur = null;
+function openRate(cur){
+  rateCur = cur;
+  const m = rateMeta(cur);
+  $('#rateTitle').textContent = cur + ' rate';
+  $('#rateLbl').textContent = `AUD per 1 ${cur}`;
+  $('#rateVal').value = m.rate ? m.rate.toFixed(4) : '';
+  $('#rateHelp').innerHTML = m.missing
+    ? 'No rate cached yet.'
+    : `Currently ${m.manual ? 'a manual override you set' : 'the live rate'} from ${esc(m.day || 'an unknown date')}. ` +
+      `At this rate ${fmtCur(100,cur)} is ${fmtAud(100*m.rate)}. Past expenses keep the rate they were saved with.`;
+  $('#rateClear').style.display = m.manual ? '' : 'none';
+  openSheet('rateSheet');
+}
+
+function saveRate(){
+  const v = Number($('#rateVal').value);
+  if (!(v > 0)){ toast('Enter a rate above 0'); return; }
+  S.rates = CURS.map(c => {
+    const ex = (S.rates||[]).find(r => r.currency === c) || { currency:c, rate_to_aud:c==='AUD'?1:0, last_updated:'', is_manual_override:false };
+    return c === rateCur
+      ? { currency:c, rate_to_aud:round4(v), last_updated:today(), is_manual_override:true }
+      : ex;
+  });
+  enqueue('setRate', { currency:rateCur, rate_to_aud:round4(v) });
+  persist(); renderMore(); closeSheet('rateSheet'); toast(rateCur + ' set manually');
+}
+const round4 = n => Math.round(Number(n)*10000)/10000;
+
+function clearRate(){
+  S.rates = (S.rates||[]).map(r => r.currency === rateCur ? Object.assign({}, r, { is_manual_override:false }) : r);
+  enqueue('clearOverride', { currency:rateCur });
+  persist(); renderMore(); closeSheet('rateSheet'); toast('Override cleared');
+}
+
+/* ---------------- settlements ---------------- */
+
+let payTx = null;
+function openPay(i){
+  payTx = (window.__tx || [])[i];
+  if (!payTx) return;
+  $('#payWho').textContent = `${payTx.from} pays ${payTx.to}`;
+  $('#payAmt').value = money(payTx.c).toFixed(2);
+  $('#payNote').value = '';
+  openSheet('paySheet');
+}
+
+function savePay(){
+  const amt = Number($('#payAmt').value);
+  if (!(amt > 0)){ toast('Enter an amount'); return; }
+  const st = {
+    id: 's' + Date.now() + Math.floor(Math.random()*1000),
+    from: payTx.from, to: payTx.to, amount_aud: round2(amt),
+    date: today(), note: $('#payNote').value.trim()
+  };
+  S.settlements.push(st);
+  enqueue('addSettlement', st);
+  persist(); renderAll(); renderSettle(); closeSheet('paySheet');
+  toast('Settlement logged');
+}
+
+function unsettle(id){
+  S.settlements = (S.settlements||[]).filter(s => String(s.id) !== String(id));
+  enqueue('deleteSettlement', { id });
+  persist(); renderAll(); renderSettle(); toast('Settlement removed');
+}
+
+/* ============================================================
+   Events
+   ============================================================ */
+
+document.addEventListener('click', e => {
+  const t = e.target.closest('[data-go],[data-close],[data-ex],[data-city],[data-paid],[data-part],' +
+    '[data-st],[data-fc],[data-fp],[data-rate],[data-pay],[data-unsettle],[data-editex],[data-ip],[data-idel]');
+  if (!t) return;
+  const d = t.dataset;
+
+  if (d.go)        { go(d.go); }
+  else if (d.close){ closeSheet(d.close); }
+  else if (d.ex)   { openDetail(d.ex); }
+  else if (d.editex){ closeSheet('detSheet'); openEdit(d.editex); }
+  else if (d.city !== undefined && d.city !== ''){
+    F.city = d.city; F.cur = curOf(d.city); renderForm();
+  }
+  else if (d.paid) { F.paid_by = d.paid; renderForm(); }
+  else if (d.part) {
+    const i = F.participants.indexOf(d.part);
+    if (i >= 0){ if (F.participants.length > 1) F.participants.splice(i,1); }
+    else F.participants.push(d.part);
+    renderSplitBody(); renderPreview();
+  }
+  else if (d.st)   { F.split_type = d.st; renderForm(); }
+  else if (d.fc !== undefined && t.hasAttribute('data-fc')){ HF.city = d.fc; renderHistory(); }
+  else if (d.fp !== undefined && t.hasAttribute('data-fp')){ HF.person = d.fp; renderHistory(); }
+  else if (d.rate) { openRate(d.rate); }
+  else if (d.pay !== undefined && t.hasAttribute('data-pay')){ openPay(Number(d.pay)); }
+  else if (d.unsettle){ unsettle(d.unsettle); }
+  else if (d.ip){
+    const [i, ...rest] = d.ip.split(':'); const p = rest.join(':');
+    const it = F.items[Number(i)];
+    const k = it.people.indexOf(p);
+    if (k >= 0) it.people.splice(k,1); else it.people.push(p);
+    renderSplitBody(); renderPreview();
+  }
+  else if (d.idel !== undefined && t.hasAttribute('data-idel')){
+    F.items.splice(Number(d.idel),1);
+    if (!F.items.length) F.items = [{ name:'', amount:'', people:S.people.slice() }];
+    renderForm();
+  }
+});
+
+document.addEventListener('click', e => {
+  if (e.target.id === 'addItem'){ F.items.push({ name:'', amount:'', people:S.people.slice() }); renderForm(); }
+  if (e.target.id === 'evenUp'){
+    const bag = F.split_type === 'exact' ? F.exact : F.percent;
+    const target = F.split_type === 'exact' ? formAmount() : 100;
+    const n = S.people.length || 1;
+    const base = Math.floor(target / n * 100) / 100;
+    S.people.forEach((p,i) => bag[p] = i === n-1 ? round2(target - base*(n-1)) : base);
+    renderSplitBody(); renderPreview();
+  }
+  if (e.target.id === 'savePeople'){
+    const names = $$('[data-person]').map(i => i.value.trim()).filter(Boolean);
+    if (!names.length){ toast('Need at least one name'); return; }
+    S.people = names; enqueue('setPeople', { people:names });
+    persist(); renderAll(); renderMore(); toast('Names saved');
+  }
+});
+
+document.addEventListener('input', e => {
+  const el = e.target;
+  if (!F && !['cfgUrl','cfgToken'].includes(el.id)) { /* form not open */ }
+  if (el.id === 'exAmount' && F){ F.amount = el.value.replace(/[^0-9.]/g,''); renderPreview(); syncAudLine(); }
+  else if (el.id === 'exDesc' && F){ F.desc = el.value; }
+  else if (el.id === 'exDate' && F){ F.date = el.value; }
+  else if (el.id === 'exExtra' && F){ F.extra = el.value.replace(/[^0-9.]/g,''); refreshItemTotals(); }
+  else if (el.dataset.share && F){
+    const bag = F.split_type === 'exact' ? F.exact : F.percent;
+    bag[el.dataset.share] = el.value.replace(/[^0-9.]/g,'');
+    updateRemaining(); renderPreview();
+  }
+  else if (el.dataset.iname !== undefined && F){ F.items[Number(el.dataset.iname)].name = el.value; }
+  else if (el.dataset.iamt !== undefined && F){
+    F.items[Number(el.dataset.iamt)].amount = el.value.replace(/[^0-9.]/g,'');
+    refreshItemTotals();
+  }
+});
+
+/* Light-touch updates that avoid re-rendering (and blurring) the live input. */
+function syncAudLine(){
+  const m = rateMeta(F.cur);
+  $('#exAud').textContent = '≈ ' + fmtAud(formAmount() * (m.rate || 0));
+}
+function refreshItemTotals(){
+  const amtEl = $('#exAmount');
+  amtEl.value = itemsTotal() ? itemsTotal().toFixed(2) : '';
+  const tl = $('#exSplitBody .split-line b');
+  if (tl) tl.textContent = fmtCur(itemsTotal(), F.cur);
+  syncAudLine(); renderPreview();
+}
+function updateRemaining(){
+  const bag = F.split_type === 'exact' ? F.exact : F.percent;
+  const target = F.split_type === 'exact' ? formAmount() : 100;
+  const got = S.people.reduce((a,p) => a + (Number(bag[p]) || 0), 0);
+  const left = target - got;
+  const line = $('#exSplitBody .split-line');
+  if (!line) return;
+  line.querySelector('span').textContent = Math.abs(left) < 0.005 ? 'Balanced' : (left > 0 ? 'Still to assign' : 'Over by');
+  const b = line.querySelector('b');
+  b.textContent = Math.abs(left).toFixed(2) + ' ' + (F.split_type === 'exact' ? F.cur : '%');
+  b.className = 'mono ' + (Math.abs(left) < 0.005 ? 'pos' : 'neg');
+}
+
+$('#addBtn').addEventListener('click', openAdd);
+$('#exSave').addEventListener('click', saveExpense);
+$('#exDelete').addEventListener('click', deleteExpense);
+$('#rateSave').addEventListener('click', saveRate);
+$('#rateClear').addEventListener('click', clearRate);
+$('#paySave').addEventListener('click', savePay);
+$('#syncBtn').addEventListener('click', () => sync());
+$('#forceSync').addEventListener('click', () => { sync(); toast('Syncing…'); });
+$('#refreshRates').addEventListener('click', async () => {
+  toast('Fetching rates…');
+  try { const d = await call('refreshRates', {}); S.rates = d.rates; persist(); renderMore(); toast('Rates updated'); }
+  catch(err){ toast(err.message); }
+});
+
+$('#cfgSave').addEventListener('click', async () => {
+  const url = $('#cfgUrl').value.trim(), token = $('#cfgToken').value.trim();
+  if (!/^https:\/\/script\.google\.com\/.*\/exec$/.test(url)){
+    $('#setupMsg').innerHTML = `<div class="banner bad">That does not look like an Apps Script <b>/exec</b> URL.</div>`; return;
+  }
+  $('#setupMsg').innerHTML = `<div class="banner ok">Connecting…</div>`;
+  const prev = CFG; CFG = { url, token };
+  try {
+    const d = await call('bootstrap', {}, { refreshRates:true });
+    S = { people:d.people||[], expenses:d.expenses||[], rates:d.rates||[], settlements:d.settlements||[] };
+    save(K_CFG, CFG); persist();
+    $('#setupMsg').innerHTML = '';
+    renderAll(); go('home'); toast('Connected');
+  } catch(err){
+    CFG = prev;
+    $('#setupMsg').innerHTML = `<div class="banner bad">${esc(err.message)}</div>`;
+  }
+});
+
+$('#cfgClear').addEventListener('click', () => {
+  if (QUEUE.length && !confirm(`${QUEUE.length} change(s) have not synced yet. Disconnect anyway?`)) return;
+  localStorage.removeItem(K_CFG); localStorage.removeItem(K_STATE); localStorage.removeItem(K_QUEUE);
+  CFG = null; S = { people:[], expenses:[], rates:[], settlements:[] }; QUEUE = [];
+  go('setup');
+});
+
+window.addEventListener('online', () => sync());
+document.addEventListener('visibilitychange', () => { if (!document.hidden) sync(); });
+window.addEventListener('scroll', () => {
+  const tb = document.querySelector('.screen.on .topbar');
+  if (tb) tb.classList.toggle('stuck', window.scrollY > 6);
+});
+
+/* ---------------- boot ---------------- */
+renderAll();
+if (CFG && CFG.url){ go('home'); sync(); }
+else go('setup');
+</script>
+</body>
+</html>
