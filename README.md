@@ -12,6 +12,8 @@ GitHub Pages; all data lives in a Google Sheet behind an Apps Script Web App.
   to one or more people, with tax/tip prorated across whoever is on that receipt).
 - **Settle Up:** computes the fewest transactions that clear every balance, so a
   chain like A owes B $40 and B owes C $40 collapses to A pays C $40.
+- **Receipt photos and plain English:** optional — photograph a bill or describe
+  it (dictation works) and Claude fills the form in for you to check. See §6.
 - **Offline-first:** every change is written to the phone first and pushed to the
   Sheet when Google is reachable. This matters — see the mainland China note below.
 
@@ -163,6 +165,60 @@ It launches full-screen with no Safari chrome, its own icon, and the dark theme
 follows your phone's appearance setting. Your URL and token stay saved, so it
 opens straight to the balances.
 
+## 6. Optional: scan receipts and describe expenses out loud
+
+Two extra ways to add an expense, both off by default:
+
+- **📷 Scan receipt** — photograph the bill; the line items, total, tax and
+  currency come back filled in.
+- **💬 Describe it** — "Hotpot in Chengdu, 396 yuan, I paid, Mei didn't drink"
+  becomes an itemized split. Tap the 🎤 on the iOS keyboard and say it instead of
+  typing; that is ordinary system dictation, so it works in any text field.
+
+Both land in the normal add-expense form for you to check. **Nothing is saved
+until you tap Save**, and you can edit every field first.
+
+### Turning them on
+
+They need an Anthropic API key, which is **pay-as-you-go and separate from any
+Claude subscription** — a Claude Pro or Max plan does not include API credit.
+
+1. Get a key at <https://console.anthropic.com> → API keys. Add a little credit.
+2. In the Apps Script editor, add this temporarily at the bottom of `Code.gs`:
+   ```js
+   function connectClaude() { setApiKey('sk-ant-PASTE_YOURS_HERE'); }
+   ```
+3. Select **`connectClaude`** in the function dropdown, **Run**, then delete the
+   function again. The key is now in script properties.
+4. Reopen the app. The two buttons appear at the top of the add-expense sheet.
+
+`clearApiKey()` turns the features back off; the buttons disappear on their own.
+
+### What it costs
+
+Roughly **3–6 cents per receipt** and about **a cent** per typed description, on
+`claude-opus-5`. A whole trip of daily receipts runs to a couple of dollars. To
+spend less, change `CLAUDE_MODEL` in `Code.gs` to `claude-sonnet-5`, which is
+cheaper and still reads receipts well.
+
+The request runs at `effort: "low"` — this is extraction, not hard reasoning, and
+low effort keeps the round trip inside Apps Script's fetch timeout. Server-side
+refusal fallbacks are enabled, so a declined request retries on another model
+inside the same call rather than failing; if the API rejects that beta flag, the
+code retries once without it so the feature can't break on a flag change.
+
+### Where the key lives
+
+In the **script's** properties, on Google's side. The phone never sees it and it
+is not in this repo. The photo goes phone → your Apps Script → Anthropic; it is
+read once and never stored — only the expense it produces is saved.
+
+### What it won't do
+
+These need a live connection to both Google and Anthropic, so they will not work
+in mainland China without a VPN. Everything else in the app still works offline —
+type the expense in by hand and it queues like any other change.
+
 ---
 
 ## Exchange rates
@@ -244,5 +300,15 @@ Apps Script cannot answer a preflight) shaped as
 | `refreshRates` | — | all rates |
 | `addSettlement` | settlement object | the settlement |
 | `deleteSettlement` | `{ id }` | the id |
+| `aiStatus` | — | `{ ai: true/false }` — whether an API key is set |
+| `parseReceipt` | `{ image, mediaType, city, currency, defaultPayer, hint }` | a draft expense |
+| `parseText` | `{ text, city, currency, defaultPayer }` | a draft expense |
 
 Every response is `{ ok: true, ... }` or `{ ok: false, error }`.
+
+The three AI actions are handled before the script lock is taken — they touch no
+rows and take tens of seconds, so holding the lock would block every other write
+for the duration. Draft expenses are validated against the People list, the
+currency list and the city list before they reach the app; a split the model
+picked but did not populate falls back to an equal split rather than producing an
+expense that splits to nothing.

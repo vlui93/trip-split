@@ -18,6 +18,7 @@ var SHEET_RATES       = 'ExchangeRates';
 var SHEET_SETTLEMENTS = 'Settlements';
 
 var CURRENCIES = ['AUD', 'HKD', 'MOP', 'CNY'];
+var CITY_NAMES = ['Hong Kong', 'Macau', 'Guangzhou', 'Chongqing', 'Chengdu', 'Sydney'];
 
 var HEADERS = {};
 HEADERS[SHEET_PEOPLE]      = ['name'];
@@ -173,6 +174,28 @@ function doPost(e) {
 }
 
 function handle(e, req) {
+  var expected = PropertiesService.getScriptProperties().getProperty('API_TOKEN');
+  if (!expected) return json({ ok: false, error: 'Backend not set up — run setup() in the script editor.' });
+  if (String(req.token || '') !== expected) return json({ ok: false, error: 'Bad token' });
+
+  var action  = String(req.action || 'bootstrap');
+  var payload = req.payload || {};
+
+  // The Claude calls take tens of seconds and touch no rows, so they must not
+  // hold the script lock — that would block every other write for the duration.
+  if (action === 'aiStatus' || action === 'parseReceipt' || action === 'parseText') {
+    try {
+      var aiOut;
+      if (action === 'aiStatus')          aiOut = { ai: aiEnabled() };
+      else if (action === 'parseReceipt') aiOut = { draft: parseReceipt(payload) };
+      else                                aiOut = { draft: parseText(payload) };
+      aiOut.ok = true;
+      return json(aiOut);
+    } catch (err) {
+      return json({ ok: false, error: String(err && err.message ? err.message : err) });
+    }
+  }
+
   var lock = LockService.getScriptLock();
   try {
     lock.waitLock(25000);
@@ -180,12 +203,6 @@ function handle(e, req) {
     return json({ ok: false, error: 'Busy, try again' });
   }
   try {
-    var expected = PropertiesService.getScriptProperties().getProperty('API_TOKEN');
-    if (!expected) return json({ ok: false, error: 'Backend not set up — run setup() in the script editor.' });
-    if (String(req.token || '') !== expected) return json({ ok: false, error: 'Bad token' });
-
-    var action  = String(req.action || 'bootstrap');
-    var payload = req.payload || {};
     var out;
 
     switch (action) {
@@ -587,4 +604,284 @@ function clearOverride(currency) {
     writeRates(map);
   }
   return refreshRates(false);
+}
+
+/* ------------------------------------------------------------------ *
+ * Claude — receipt photos and plain-English descriptions
+ *
+ * The API key lives in this script's properties, never on the phone and
+ * never in the repo. Set it once with setApiKey('sk-ant-...').
+ * ------------------------------------------------------------------ */
+
+var CLAUDE_MODEL = 'claude-opus-5';
+var CLAUDE_URL   = 'https://api.anthropic.com/v1/messages';
+
+function setApiKey(key) {
+  key = String(key || '').trim();
+  if (!key) throw new Error('Pass your Anthropic API key, e.g. setApiKey("sk-ant-...")');
+  PropertiesService.getScriptProperties().setProperty('ANTHROPIC_API_KEY', key);
+  Logger.log('Anthropic API key saved. Receipt scanning and describe-it are now enabled.');
+  return 'ok';
+}
+
+function clearApiKey() {
+  PropertiesService.getScriptProperties().deleteProperty('ANTHROPIC_API_KEY');
+  Logger.log('Anthropic API key removed. The AI features will switch themselves off.');
+  return 'ok';
+}
+
+function aiEnabled() {
+  return !!PropertiesService.getScriptProperties().getProperty('ANTHROPIC_API_KEY');
+}
+
+/** The shape every parse returns. All fields required so the schema stays strict. */
+function draftSchema(people) {
+  return {
+    type: 'object',
+    additionalProperties: false,
+    required: ['description', 'date', 'city', 'currency', 'amount_local', 'paid_by',
+               'split_type', 'participants', 'shares', 'items', 'extra', 'note'],
+    properties: {
+      description:  { type: 'string', description: 'Short label, e.g. "Hotpot dinner". Never blank.' },
+      date:         { type: 'string', description: 'YYYY-MM-DD. Use the date on the receipt if legible, otherwise today.' },
+      city:         { type: 'string', enum: CITY_NAMES, description: 'Which trip city this was in. Keep the one given in the prompt unless the receipt or description clearly says otherwise.' },
+      currency:     { type: 'string', enum: CURRENCIES },
+      amount_local: { type: 'number', description: 'Grand total in the local currency. Never converted to AUD.' },
+      paid_by:      { type: 'string', enum: people, description: 'Who paid. If unstated, the default payer given in the prompt.' },
+      split_type:   { type: 'string', enum: ['equal', 'exact', 'percent', 'itemized'] },
+      participants: {
+        type: 'array', items: { type: 'string', enum: people },
+        description: 'For split_type "equal": who shares it. Empty array otherwise.'
+      },
+      shares: {
+        type: 'array',
+        description: 'For "exact": each person’s amount in local currency. For "percent": each person’s percentage. Empty array otherwise.',
+        items: {
+          type: 'object', additionalProperties: false,
+          required: ['person', 'value'],
+          properties: {
+            person: { type: 'string', enum: people },
+            value:  { type: 'number' }
+          }
+        }
+      },
+      items: {
+        type: 'array',
+        description: 'For "itemized": one entry per line item. Empty array otherwise.',
+        items: {
+          type: 'object', additionalProperties: false,
+          required: ['name', 'amount', 'people'],
+          properties: {
+            name:   { type: 'string' },
+            amount: { type: 'number', description: 'Line total in local currency, including quantity.' },
+            people: { type: 'array', items: { type: 'string', enum: people } }
+          }
+        }
+      },
+      extra: { type: 'number', description: 'Tax, service charge and tip combined, in local currency. 0 if none.' },
+      note:  { type: 'string', description: 'One short sentence on anything uncertain, for the human to check. Empty if nothing.' }
+    }
+  };
+}
+
+function draftSystemPrompt(people, city, currency, defaultPayer, todayStr) {
+  return [
+    'You turn receipts and plain-English descriptions into a single expense for a',
+    'three-person trip splitter. The trip runs 16 Oct - 1 Nov 2026 across Hong Kong,',
+    'Macau, Guangzhou, Chongqing and Chengdu, with Sydney as home base.',
+    '',
+    'The three people are: ' + people.join(', ') + '. Use these names exactly.',
+    'Supported currencies: ' + CURRENCIES.join(', ') + '.',
+    'City currencies: Hong Kong=HKD, Macau=MOP, Guangzhou/Chongqing/Chengdu=CNY, Sydney=AUD.',
+    '',
+    'Context for this expense:',
+    '- City: ' + (city || 'unknown'),
+    '- Expected currency: ' + (currency || 'unknown'),
+    '- Default payer if not stated: ' + defaultPayer,
+    "- Today's date: " + todayStr,
+    '',
+    'Rules:',
+    '1. Report amounts in the local currency exactly as written. Never convert to AUD;',
+    '   the app does that itself.',
+    '2. amount_local is the grand total actually paid, including tax and service.',
+    '3. Put tax, service charge and tip in "extra" — never as a line item.',
+    '4. Use "itemized" only when you can read the line items AND you know who had what.',
+    '   If the split is not stated, prefer "equal" across all three people.',
+    '5. Never invent an amount you cannot read. If the total is unclear, put your best',
+    '   reading in amount_local and say so in "note".',
+    '6. For "exact", the shares must add up to amount_local. For "percent", to 100.',
+    '7. Keep "description" short and concrete — what was bought, not a sentence.',
+    '8. Use "note" only for genuine uncertainty. Leave it empty when the reading is clean.'
+  ].join('\n');
+}
+
+/**
+ * One Claude call returning a draft expense. Raw HTTP because Apps Script has
+ * no Anthropic SDK. Retries once without the fallback beta if the API rejects it,
+ * so an unfamiliar beta flag can never take the feature down.
+ */
+function claudeDraft(userContent, people, city, currency, defaultPayer) {
+  var key = PropertiesService.getScriptProperties().getProperty('ANTHROPIC_API_KEY');
+  if (!key) throw new Error('AI features are off. Run setApiKey("sk-ant-...") in the script editor to turn them on.');
+
+  var todayStr = ymd(new Date());
+  var body = {
+    model: CLAUDE_MODEL,
+    max_tokens: 4000,
+    system: draftSystemPrompt(people, city, currency, defaultPayer, todayStr),
+    messages: [{ role: 'user', content: userContent }],
+    output_config: {
+      // Low effort keeps the round trip inside Apps Script's fetch timeout;
+      // this is extraction, not reasoning-heavy work.
+      effort: 'low',
+      format: { type: 'json_schema', schema: draftSchema(people) }
+    },
+    fallbacks: 'default'
+  };
+
+  var res = claudeFetch(key, body, true);
+  if (res.getResponseCode() === 400 && /fallback|beta/i.test(res.getContentText())) {
+    delete body.fallbacks;
+    res = claudeFetch(key, body, false);
+  }
+
+  var code = res.getResponseCode();
+  var text = res.getContentText();
+  if (code !== 200) {
+    var msg = text;
+    try { msg = JSON.parse(text).error.message; } catch (err) {}
+    if (code === 401) msg = 'Anthropic rejected the API key. Re-run setApiKey with a valid key.';
+    if (code === 429) msg = 'Anthropic rate limit hit. Wait a moment and try again.';
+    throw new Error('Claude error ' + code + ': ' + msg);
+  }
+
+  var data = JSON.parse(text);
+
+  // stop_details is only populated on a refusal, so guard before reading it.
+  if (data.stop_reason === 'refusal') {
+    var why = (data.stop_details && data.stop_details.explanation) ? ' (' + data.stop_details.explanation + ')' : '';
+    throw new Error('Claude declined to process that image' + why + '. Enter the expense by hand.');
+  }
+
+  var out = '';
+  (data.content || []).forEach(function (b) { if (b.type === 'text') out += b.text; });
+  if (!out) throw new Error('Claude returned nothing to read. Try again, or enter it by hand.');
+
+  var draft;
+  try {
+    draft = JSON.parse(out);
+  } catch (err) {
+    throw new Error('Could not read Claude’s reply as JSON. Try again, or enter it by hand.');
+  }
+  return normaliseDraft(draft, people, currency, city);
+}
+
+function claudeFetch(key, body, withFallback) {
+  var headers = {
+    'x-api-key': key,
+    'anthropic-version': '2023-06-01'
+  };
+  if (withFallback) headers['anthropic-beta'] = 'server-side-fallback-2026-07-01';
+
+  return UrlFetchApp.fetch(CLAUDE_URL, {
+    method: 'post',
+    contentType: 'application/json',
+    headers: headers,
+    payload: JSON.stringify(body),
+    muteHttpExceptions: true
+  });
+}
+
+/** Trust nothing from the model: clamp names, currency and numbers to what the app allows. */
+function normaliseDraft(d, people, fallbackCurrency, fallbackCity) {
+  function person(n) { return people.indexOf(String(n)) >= 0 ? String(n) : null; }
+  function num(v) { var x = Number(v); return isFinite(x) && x > 0 ? Math.round(x * 100) / 100 : 0; }
+
+  var cur = String(d.currency || '').toUpperCase();
+  if (CURRENCIES.indexOf(cur) < 0) cur = fallbackCurrency || 'AUD';
+
+  var city = String(d.city || '');
+  if (CITY_NAMES.indexOf(city) < 0) city = fallbackCity || '';
+
+  var type = ['equal', 'exact', 'percent', 'itemized'].indexOf(String(d.split_type)) >= 0
+    ? String(d.split_type) : 'equal';
+
+  var participants = (d.participants || []).map(person).filter(Boolean);
+
+  var shares = {};
+  (d.shares || []).forEach(function (s) {
+    var p = person(s && s.person);
+    if (p && num(s.value)) shares[p] = num(s.value);
+  });
+
+  var items = (d.items || []).map(function (i) {
+    return {
+      name: String((i && i.name) || 'Item').slice(0, 60),
+      amount: num(i && i.amount),
+      people: ((i && i.people) || []).map(person).filter(Boolean)
+    };
+  }).filter(function (i) { return i.amount > 0 && i.people.length; });
+
+  // If the model picked a split it did not actually populate, fall back to equal
+  // rather than handing the app an expense that splits to nothing.
+  if (type === 'itemized' && !items.length) type = 'equal';
+  if ((type === 'exact' || type === 'percent') && !Object.keys(shares).length) type = 'equal';
+  if (type === 'equal' && !participants.length) participants = people.slice();
+
+  var date = String(d.date || '');
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) date = ymd(new Date());
+
+  return {
+    description:  String(d.description || '').slice(0, 80),
+    date:         date,
+    city:         city,
+    currency:     cur,
+    amount_local: num(d.amount_local),
+    paid_by:      person(d.paid_by) || people[0],
+    split_type:   type,
+    participants: participants,
+    shares:       shares,
+    items:        items,
+    extra:        num(d.extra),
+    note:         String(d.note || '').slice(0, 200)
+  };
+}
+
+function parseReceipt(p) {
+  var people = getPeople();
+  if (!people.length) throw new Error('Add people in Settings first.');
+
+  var b64 = String(p.image || '');
+  if (!b64) throw new Error('No image received.');
+  var media = String(p.mediaType || 'image/jpeg');
+  if (['image/jpeg', 'image/png', 'image/webp', 'image/gif'].indexOf(media) < 0) media = 'image/jpeg';
+
+  var content = [
+    { type: 'image', source: { type: 'base64', media_type: media, data: b64 } },
+    { type: 'text', text: receiptPrompt(p) }
+  ];
+  return claudeDraft(content, people, p.city, p.currency, p.defaultPayer || people[0]);
+}
+
+function receiptPrompt(p) {
+  var t = 'Read this receipt and turn it into one expense.';
+  if (p.hint) {
+    t += '\n\nThe person entering it added this, which overrides anything ambiguous ' +
+         'on the receipt — especially who had what:\n"' + String(p.hint).slice(0, 500) + '"';
+  }
+  return t;
+}
+
+function parseText(p) {
+  var people = getPeople();
+  if (!people.length) throw new Error('Add people in Settings first.');
+
+  var text = String(p.text || '').trim();
+  if (!text) throw new Error('Nothing to read — say or type what the expense was.');
+
+  var content = [{
+    type: 'text',
+    text: 'Turn this description into one expense:\n\n"' + text.slice(0, 2000) + '"'
+  }];
+  return claudeDraft(content, people, p.city, p.currency, p.defaultPayer || people[0]);
 }

@@ -175,6 +175,16 @@ select{background-image:linear-gradient(45deg,transparent 50%,var(--muted) 50%),
 .toast.on{opacity:1;visibility:visible;transform:none}
 .dot{width:8px;height:8px;border-radius:50%;background:var(--faint);flex:none}
 .dot.ok{background:var(--pos)} .dot.pend{background:var(--warn)} .dot.bad{background:var(--neg)}
+.aibar{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:12px}
+.aibar button{min-height:50px;border-radius:12px;background:var(--accent-soft);color:var(--accent);font-weight:650;font-size:14.5px;display:flex;align-items:center;justify-content:center;gap:7px;border:1px solid transparent}
+.aibar button:active{transform:scale(.975)}
+.busy{position:fixed;inset:0;z-index:80;display:none;place-items:center;background:color-mix(in srgb,var(--bg) 82%,transparent);backdrop-filter:blur(6px);-webkit-backdrop-filter:blur(6px)}
+.busy.on{display:grid}
+.busy .inner{text-align:center;padding:24px}
+.spin{width:38px;height:38px;border-radius:50%;border:3px solid var(--line);border-top-color:var(--accent);margin:0 auto 14px;animation:spin .8s linear infinite}
+@keyframes spin{to{transform:rotate(360deg)}}
+.busy .msg{font-weight:650;font-size:15px}
+.busy .sub2{color:var(--muted);font-size:13px;margin-top:5px}
 .itemrow{background:var(--surface-2);border-radius:12px;padding:10px;margin-bottom:8px}
 .split-line{display:flex;justify-content:space-between;font-size:13.5px;padding:5px 0;color:var(--muted)}
 .split-line b{color:var(--text);font-weight:650}
@@ -299,6 +309,12 @@ select{background-image:linear-gradient(45deg,transparent 50%,var(--muted) 50%),
       <button class="btn sm ghost" data-close="exSheet">Cancel</button>
     </div>
 
+    <div class="aibar" id="aiBar" style="display:none">
+      <button id="btnScan">📷 Scan receipt</button>
+      <button id="btnSay">💬 Describe it</button>
+    </div>
+    <div id="aiNote"></div>
+
     <div class="card stack">
       <div>
         <label class="fl">City</label>
@@ -388,6 +404,50 @@ select{background-image:linear-gradient(45deg,transparent 50%,var(--muted) 50%),
       </div>
       <button class="btn primary full" id="paySave">Log settlement</button>
     </div>
+  </div>
+</div>
+
+<!-- ============ SCAN RECEIPT SHEET ============ -->
+<div class="sheet" id="scanSheet">
+  <div class="scrim" data-close="scanSheet"></div>
+  <div class="panel">
+    <div class="grab"></div>
+    <div class="sheet-head"><h2>Scan a receipt</h2><button class="btn sm ghost" data-close="scanSheet">Cancel</button></div>
+    <div class="card stack">
+      <div>
+        <label class="fl" for="scanHint">Anything the receipt won't say? (optional)</label>
+        <input id="scanHint" type="text" placeholder="Dan didn't drink, Mei paid">
+        <div style="font-size:12.5px;color:var(--muted);margin-top:6px">Who had what, or who paid. Tap the 🎤 on your keyboard to dictate instead of typing.</div>
+      </div>
+      <button class="btn primary full" id="btnPickPhoto">Take photo or choose image</button>
+      <input id="photoInput" type="file" accept="image/*" capture="environment" style="display:none">
+    </div>
+    <p class="sub">The photo is read once and not stored anywhere — only the expense it produces is saved.</p>
+  </div>
+</div>
+
+<!-- ============ DESCRIBE SHEET ============ -->
+<div class="sheet" id="saySheet">
+  <div class="scrim" data-close="saySheet"></div>
+  <div class="panel">
+    <div class="grab"></div>
+    <div class="sheet-head"><h2>Describe the expense</h2><button class="btn sm ghost" data-close="saySheet">Cancel</button></div>
+    <div class="card stack">
+      <div>
+        <label class="fl" for="sayText">What happened?</label>
+        <textarea id="sayText" rows="4" placeholder="Dinner in Chengdu, 396 yuan, I paid. Mei didn't have any beer."></textarea>
+        <div style="font-size:12.5px;color:var(--muted);margin-top:6px">Tap the 🎤 on your iPhone keyboard and just say it. Amounts, who paid, and who was in are all understood.</div>
+      </div>
+      <button class="btn primary full" id="btnSayGo">Work out the split</button>
+    </div>
+  </div>
+</div>
+
+<div class="busy" id="busy">
+  <div class="inner">
+    <div class="spin"></div>
+    <div class="msg" id="busyMsg">Working…</div>
+    <div class="sub2" id="busySub">This takes a few seconds</div>
   </div>
 </div>
 
@@ -818,6 +878,8 @@ function openAdd(){
   $('#exTitle').textContent = 'New expense';
   $('#exDelete').style.display = 'none';
   renderForm();
+  renderAiNote();
+  showAiBar();
   openSheet('exSheet');
 }
 
@@ -841,6 +903,8 @@ function openEdit(id){
   $('#exTitle').textContent = 'Edit expense';
   $('#exDelete').style.display = '';
   renderForm();
+  renderAiNote();
+  showAiBar();
   openSheet('exSheet');
 }
 
@@ -1261,7 +1325,7 @@ $('#cfgSave').addEventListener('click', async () => {
     S = { people:d.people||[], expenses:d.expenses||[], rates:d.rates||[], settlements:d.settlements||[] };
     save(K_CFG, CFG); persist();
     $('#setupMsg').innerHTML = '';
-    renderAll(); go('home'); toast('Connected');
+    renderAll(); go('home'); toast('Connected'); checkAi();
   } catch(err){
     CFG = prev;
     $('#setupMsg').innerHTML = `<div class="banner bad">${esc(err.message)}</div>`;
@@ -1282,9 +1346,188 @@ window.addEventListener('scroll', () => {
   if (tb) tb.classList.toggle('stuck', window.scrollY > 6);
 });
 
+/* ============================================================
+   Receipt photos and plain-English descriptions
+
+   Both go to Apps Script, which calls Claude with the API key held in
+   script properties. The phone never sees the key. The result only ever
+   prefills the form — nothing is saved until you tap Save.
+   ============================================================ */
+
+let AI_ON = false;
+
+function showAiBar(){
+  const bar = $('#aiBar');
+  if (bar) bar.style.display = AI_ON ? 'grid' : 'none';
+}
+
+async function checkAi(){
+  if (!CFG || !CFG.url) return;
+  try {
+    const d = await call('aiStatus', {});
+    AI_ON = !!d.ai;
+  } catch(err){
+    AI_ON = false;      // offline or not set up — the manual form still works
+  }
+  showAiBar();
+}
+
+function busy(on, msg, sub){
+  const el = $('#busy');
+  if (msg) $('#busyMsg').textContent = msg;
+  if (sub) $('#busySub').textContent = sub;
+  el.classList.toggle('on', !!on);
+}
+
+/**
+ * Shrink to 1568px on the long edge — Claude downsamples to that anyway, so
+ * anything larger is upload time for nothing — and step the JPEG quality down
+ * until the base64 is small enough for an Apps Script POST.
+ */
+function downscale(file, maxEdge){
+  return new Promise((resolve, reject) => {
+    const url = URL.createObjectURL(file);
+    const img = new Image();
+    img.onload = () => {
+      URL.revokeObjectURL(url);
+      let w = img.naturalWidth, h = img.naturalHeight;
+      if (!w || !h) return reject(new Error('That image could not be read.'));
+      const k = Math.min(1, maxEdge / Math.max(w, h));
+      w = Math.round(w * k); h = Math.round(h * k);
+      const c = document.createElement('canvas');
+      c.width = w; c.height = h;
+      const ctx = c.getContext('2d');
+      ctx.fillStyle = '#fff'; ctx.fillRect(0, 0, w, h);   // flatten any alpha
+      ctx.drawImage(img, 0, 0, w, h);
+      let q = 0.82, data = '';
+      for (let i = 0; i < 5; i++){
+        data = c.toDataURL('image/jpeg', q);
+        if (data.length < 3500000) break;
+        q -= 0.13;
+      }
+      const b64 = data.split(',')[1];
+      if (!b64) return reject(new Error('That image could not be converted.'));
+      resolve(b64);
+    };
+    img.onerror = () => { URL.revokeObjectURL(url); reject(new Error('That image could not be opened.')); };
+    img.src = url;
+  });
+}
+
+/** Push a parsed draft into the open form. Nothing is saved. */
+function applyDraft(d){
+  if (d.city && CITIES.some(c => c.name === d.city)) F.city = d.city;
+  F.cur          = d.currency || F.cur;
+  F.desc         = d.description || F.desc;
+  F.date         = d.date || F.date;
+  F.paid_by      = S.people.includes(d.paid_by) ? d.paid_by : F.paid_by;
+  F.split_type   = d.split_type || 'equal';
+  F.participants = (d.participants && d.participants.length) ? d.participants.slice() : S.people.slice();
+  F.exact        = d.split_type === 'exact'   ? Object.assign({}, d.shares) : {};
+  F.percent      = d.split_type === 'percent' ? Object.assign({}, d.shares) : {};
+  F.items        = (d.items && d.items.length)
+    ? d.items.map(i => ({ name: i.name, amount: String(i.amount), people: (i.people || []).slice() }))
+    : [{ name:'', amount:'', people:S.people.slice() }];
+  F.extra        = d.extra ? String(d.extra) : '';
+  if (F.split_type !== 'itemized') F.amount = String(d.amount_local || '');
+
+  // In itemized mode the form derives the total from the line items, so a gap
+  // against the receipt total means something was misread. Say so rather than
+  // quietly saving a different number than the receipt.
+  let gap = 0;
+  if (F.split_type === 'itemized' && d.amount_local){
+    gap = Math.round((d.amount_local - itemsTotal()) * 100) / 100;
+  }
+  F.aiNote = d.note || '';
+  F.aiGap  = Math.abs(gap) > 0.02 ? gap : 0;
+  F.aiTotal = d.amount_local || 0;
+
+  renderForm();
+  renderAiNote();
+}
+
+function renderAiNote(){
+  const box = $('#aiNote');
+  if (!box || !F) return;
+  let html = '';
+  if (F.aiNote){
+    html += `<div class="banner warn"><span class="dot pend"></span><div>${esc(F.aiNote)}</div></div>`;
+  }
+  if (F.aiGap){
+    const over = F.aiGap > 0;
+    html += `<div class="banner ${over ? 'warn' : 'bad'}">
+      <span class="dot ${over ? 'pend' : 'bad'}"></span>
+      <div>Line items come to ${esc(fmtCur(itemsTotal(), F.cur))} but the receipt total reads
+      ${esc(fmtCur(F.aiTotal, F.cur))} — ${over ? 'short by' : 'over by'} ${esc(fmtCur(Math.abs(F.aiGap), F.cur))}.
+      ${over ? `<button class="btn sm ghost" id="aiFixGap" style="margin-top:8px">Add the difference to tax &amp; tip</button>` : ''}
+      </div></div>`;
+  }
+  box.innerHTML = html;
+}
+
+async function runScan(file){
+  closeSheet('scanSheet');
+  busy(true, 'Reading your receipt…', 'Usually 10–20 seconds');
+  try {
+    const image = await downscale(file, 1568);
+    const d = await call('parseReceipt', {
+      image, mediaType: 'image/jpeg',
+      city: F.city, currency: F.cur,
+      defaultPayer: F.paid_by,
+      hint: $('#scanHint').value.trim()
+    });
+    applyDraft(d.draft);
+    toast('Receipt read — check it before saving');
+  } catch(err){
+    toast(aiError(err));
+  } finally {
+    busy(false);
+  }
+}
+
+async function runSay(){
+  const text = $('#sayText').value.trim();
+  if (!text){ toast('Say or type what the expense was'); return; }
+  closeSheet('saySheet');
+  busy(true, 'Working out the split…', 'Usually a few seconds');
+  try {
+    const d = await call('parseText', {
+      text, city: F.city, currency: F.cur, defaultPayer: F.paid_by
+    });
+    applyDraft(d.draft);
+    toast('Done — check it before saving');
+  } catch(err){
+    toast(aiError(err));
+  } finally {
+    busy(false);
+  }
+}
+
+function aiError(err){
+  if (err instanceof TypeError) return "Can't reach Google — this one needs a connection.";
+  return err.message || String(err);
+}
+
+$('#btnScan').addEventListener('click', () => { $('#scanHint').value = ''; openSheet('scanSheet'); });
+$('#btnSay').addEventListener('click',  () => { $('#sayText').value  = ''; openSheet('saySheet'); });
+$('#btnPickPhoto').addEventListener('click', () => $('#photoInput').click());
+$('#btnSayGo').addEventListener('click', runSay);
+$('#photoInput').addEventListener('change', e => {
+  const f = e.target.files && e.target.files[0];
+  e.target.value = '';           // so picking the same file twice still fires
+  if (f) runScan(f);
+});
+document.addEventListener('click', e => {
+  if (e.target.id === 'aiFixGap' && F){
+    F.extra = String(Math.round(((Number(F.extra) || 0) + F.aiGap) * 100) / 100);
+    F.aiGap = 0;
+    renderForm(); renderAiNote();
+  }
+});
+
 /* ---------------- boot ---------------- */
 renderAll();
-if (CFG && CFG.url){ go('home'); sync(); }
+if (CFG && CFG.url){ go('home'); sync(); checkAi(); }
 else go('setup');
 </script>
 </body>
