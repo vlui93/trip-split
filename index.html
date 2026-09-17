@@ -645,7 +645,8 @@ function renderSync(){
 
 function renderHome(){
   const b = balances();
-  const names = S.people.length ? S.people : Object.keys(b);
+  const names = S.people.slice();
+  Object.keys(b).forEach(n => { if (!names.includes(n) && b[n] !== 0) names.push(n); });
   $('#balances').innerHTML = names.length ? names.map(n => {
     const v = b[n] || 0;
     const cls = v > 0 ? 'pos' : v < 0 ? 'neg' : 'zero';
@@ -1193,7 +1194,6 @@ document.addEventListener('click', e => {
 
 document.addEventListener('input', e => {
   const el = e.target;
-  if (!F && !['cfgUrl','cfgToken'].includes(el.id)) { /* form not open */ }
   if (el.id === 'exAmount' && F){ F.amount = el.value.replace(/[^0-9.]/g,''); renderPreview(); syncAudLine(); }
   else if (el.id === 'exDesc' && F){ F.desc = el.value; }
   else if (el.id === 'exDate' && F){ F.date = el.value; }
