@@ -28,11 +28,66 @@ HEADERS[SHEET_RATES]       = ['currency', 'rate_to_aud', 'last_updated', 'is_man
 HEADERS[SHEET_SETTLEMENTS] = ['id', 'from', 'to', 'amount_aud', 'date', 'note'];
 
 /* ------------------------------------------------------------------ *
+ * Finding the Sheet
+ *
+ * Normally this script is bound to the Sheet (created via Extensions >
+ * Apps Script), and getActiveSpreadsheet() just works. If it was created
+ * standalone at script.google.com instead, there is no active spreadsheet,
+ * so fall back to an id stored by useSheet().
+ * ------------------------------------------------------------------ */
+
+function book() {
+  var active = SpreadsheetApp.getActiveSpreadsheet();
+  if (active) return active;
+
+  var id = PropertiesService.getScriptProperties().getProperty('SHEET_ID');
+  if (id) {
+    try {
+      return SpreadsheetApp.openById(id);
+    } catch (err) {
+      throw new Error('SHEET_ID is set to "' + id + '" but that Sheet could not be opened. ' +
+        'Check the id and re-run useSheet("<id>").');
+    }
+  }
+
+  throw new Error(
+    'This script is not attached to a Sheet.\n\n' +
+    'Easiest fix: open your Google Sheet, choose Extensions > Apps Script, and paste ' +
+    'this code there instead.\n\n' +
+    'Or, to keep this standalone script, run useSheet("<sheet id>") once. The id is the ' +
+    'long string in the Sheet URL between /d/ and /edit.');
+}
+
+/**
+ * Point a standalone script at a Sheet. Only needed if this script was NOT
+ * created from inside the Sheet via Extensions > Apps Script.
+ */
+function useSheet(id) {
+  id = String(id || '').trim();
+  // Accept a full URL as well as a bare id.
+  var m = id.match(/\/d\/([a-zA-Z0-9-_]+)/);
+  if (m) id = m[1];
+  if (!id) throw new Error('Pass the Sheet id, e.g. useSheet("1AbC...xyz")');
+
+  var name;
+  try {
+    name = SpreadsheetApp.openById(id).getName();
+  } catch (err) {
+    throw new Error('Could not open a Sheet with id "' + id + '". ' +
+      'Make sure it is the id from the Sheet URL between /d/ and /edit, and that this ' +
+      'account can open it.');
+  }
+  PropertiesService.getScriptProperties().setProperty('SHEET_ID', id);
+  Logger.log('SHEET_ID set to ' + id + ' ("' + name + '"). Now run setup().');
+  return name;
+}
+
+/* ------------------------------------------------------------------ *
  * One-time setup
  * ------------------------------------------------------------------ */
 
 function setup() {
-  var ss = SpreadsheetApp.getActiveSpreadsheet();
+  var ss = book();
 
   Object.keys(HEADERS).forEach(function (name) {
     var sh = ss.getSheetByName(name);
@@ -151,7 +206,7 @@ function json(obj) {
  * ------------------------------------------------------------------ */
 
 function sheet(name) {
-  var sh = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(name);
+  var sh = book().getSheetByName(name);
   if (!sh) throw new Error('Missing tab "' + name + '" — run setup() in the script editor.');
   return sh;
 }

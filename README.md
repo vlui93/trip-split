@@ -19,11 +19,19 @@ GitHub Pages; all data lives in a Google Sheet behind an Apps Script Web App.
 
 ## 1. Create the Sheet and the backend
 
+> **Do not start at script.google.com.** That creates a *standalone* script with
+> no Sheet attached. The script has to be created from inside the Sheet so it is
+> bound to it. If you already made one there, see "Already started at
+> script.google.com?" below — you don't have to throw it away.
+
 1. Go to <https://sheets.new> and name the spreadsheet something like
    **Trip Split 2026**.
-2. **Extensions → Apps Script**. This creates a script bound to that Sheet.
-3. Delete the placeholder `myFunction` code, paste in the whole of
-   [`Code.gs`](Code.gs), and save (⌘S).
+2. In that Sheet's menu bar, click **Extensions → Apps Script**. A new tab opens
+   with a code editor and a file called `Code.gs` containing `function
+   myFunction() {}`. Because you opened it from the Sheet, this script is bound
+   to that Sheet — that is what makes `setup()` able to find it.
+3. Select all of the placeholder code and delete it, paste in the whole of
+   [`Code.gs`](Code.gs) from this repo, and save (⌘S).
 4. In the function dropdown at the top, pick **`setup`** and click **Run**.
    - Google will ask you to authorize the script. This step has to be done by
      you, in the browser — it cannot be scripted. Choose your account, click
@@ -33,6 +41,27 @@ GitHub Pages; all data lives in a Google Sheet behind an Apps Script Web App.
      people and the four currency rows, generates an API token, and shows it.
 5. Copy the API token from the dialog (or from **View → Logs**). If you lose it,
    run `showToken()` again.
+
+### Already started at script.google.com?
+
+A standalone script can still work — it just needs to be told which Sheet to use.
+
+1. Open your Sheet and copy its id from the URL: the long string between `/d/`
+   and `/edit`.
+2. In the script editor, pick **`useSheet`** in the function dropdown. It needs
+   an argument, which the dropdown cannot pass, so instead add this line
+   temporarily at the bottom of the file:
+   ```js
+   function connectSheet() { useSheet('PASTE_THE_ID_HERE'); }
+   ```
+   Save, choose **`connectSheet`** in the dropdown, and **Run**.
+3. Now pick **`setup`** and run that. From here the steps are identical.
+
+`useSheet` also accepts the full Sheet URL if that is easier to paste. You can
+delete `connectSheet` afterwards; the id is stored in script properties.
+
+If you run `setup()` on a script that is attached to nothing, it stops with an
+error telling you this rather than failing obscurely.
 
 The tabs it creates:
 
