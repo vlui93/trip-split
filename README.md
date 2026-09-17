@@ -202,9 +202,16 @@ Free-tier limits are per-minute and per-day and sit far above what a trip needs 
 a few dozen receipts a day is not close. If you do hit one, the app says so and
 you enter that expense by hand.
 
-**Model names drift.** If the one in `GEMINI_MODELS` has been retired, the code
-asks Google for the current list, picks a suitable flash model, and remembers it.
-You should not have to touch it.
+**Model names drift, and retired ones stay listed.** When a call fails on the
+model, the code takes the replacement Google names in the error text first
+(`Please update your code to use models/...`), then falls back to `ListModels`,
+skipping anything it has already tried. It caches whatever works in the
+`GEMINI_MODEL` script property.
+
+If it ever runs out of candidates, the error names everything it tried. Run
+`listGeminiModels()` in the script editor to print what your key can actually
+use, then set `GEMINI_MODEL` directly in **Project Settings → Script
+Properties**.
 
 ### The trade-off
 
@@ -231,7 +238,7 @@ no key is set.
 
 | | Gemini | Claude |
 |---|---|---|
-| Model | `gemini-2.5-flash` (auto-corrected if retired) | `claude-opus-5` |
+| Model | `gemini-3.6-flash` (auto-corrected if retired) | `claude-opus-5` |
 | Structured output | `responseSchema` (OpenAPI subset) | `output_config.format` JSON Schema |
 | Cost | free tier | ~3–6c per receipt |
 | Trains on your data | yes, on the free tier | no |

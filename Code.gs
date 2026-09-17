@@ -618,7 +618,7 @@ var CLAUDE_URL   = 'https://api.anthropic.com/v1/messages';
 
 // Gemini's free tier needs no card. Model names drift, so this is only the first
 // guess — findGeminiModel() asks Google what actually exists if it 404s.
-var GEMINI_MODELS = ['gemini-2.5-flash', 'gemini-2.0-flash', 'gemini-flash-latest'];
+var GEMINI_MODELS = ['gemini-3.6-flash', 'gemini-flash-latest', 'gemini-2.5-flash', 'gemini-2.0-flash'];
 var GEMINI_BASE   = 'https://generativelanguage.googleapis.com/v1beta';
 
 /** Anthropic — paid, best receipt reading. */
@@ -915,26 +915,63 @@ function geminiModel() {
   return PropertiesService.getScriptProperties().getProperty('GEMINI_MODEL') || GEMINI_MODELS[0];
 }
 
-function findGeminiModel(key) {
+/** Is this failure about the model itself, rather than the key or the request? */
+function isModelProblem(code, text) {
+  return code === 404 || (code === 400 && /model|not found|not supported|no longer available/i.test(text));
+}
+
+/**
+ * Google usually names the replacement right in the error text, e.g.
+ * "Please update your code to use models/gemini-3.6-flash". That beats guessing.
+ */
+function suggestedModel(text, tried) {
+  var hits = String(text).match(/models\/[a-zA-Z0-9._\-]+/g) || [];
+  for (var i = 0; i < hits.length; i++) {
+    var name = hits[i].replace(/^models\//, '');
+    if (tried.indexOf(name) < 0) return name;
+  }
+  return null;
+}
+
+/** Ask Google what this key can actually use, skipping anything already tried. */
+function findGeminiModel(key, tried) {
+  tried = tried || [];
+  var list = listGeminiModels(key);
+  if (!list.length) return null;
+
+  var usable = list.filter(function (n) { return tried.indexOf(n) < 0; });
+  if (!usable.length) return null;
+
+  // Preferred names first, then any plain flash model, then anything at all.
+  for (var i = 0; i < GEMINI_MODELS.length; i++) {
+    if (usable.indexOf(GEMINI_MODELS[i]) >= 0) return GEMINI_MODELS[i];
+  }
+  var flash = usable.filter(function (n) {
+    return n.indexOf('flash') >= 0 &&
+           n.indexOf('thinking') < 0 && n.indexOf('image') < 0 &&
+           n.indexOf('tts') < 0 && n.indexOf('embedding') < 0 && n.indexOf('live') < 0;
+  });
+  return flash.length ? flash[0] : usable[0];
+}
+
+/** Run this in the editor to see every model your key can use. */
+function listGeminiModels(key) {
+  key = key || PropertiesService.getScriptProperties().getProperty('GEMINI_API_KEY');
+  if (!key) throw new Error('No Gemini key set.');
+
   var res = UrlFetchApp.fetch(GEMINI_BASE + '/models?key=' + encodeURIComponent(key) + '&pageSize=200',
     { muteHttpExceptions: true });
-  if (res.getResponseCode() !== 200) return null;
-
-  var list = (JSON.parse(res.getContentText()).models || []).filter(function (m) {
+  if (res.getResponseCode() !== 200) {
+    Logger.log('Could not list models: ' + res.getContentText());
+    return [];
+  }
+  var names = (JSON.parse(res.getContentText()).models || []).filter(function (m) {
     return (m.supportedGenerationMethods || []).indexOf('generateContent') >= 0;
   }).map(function (m) {
     return String(m.name || '').replace(/^models\//, '');
   });
-  if (!list.length) return null;
-
-  // Prefer one of the known-good names, then any flash model, then anything.
-  for (var i = 0; i < GEMINI_MODELS.length; i++) {
-    if (list.indexOf(GEMINI_MODELS[i]) >= 0) return GEMINI_MODELS[i];
-  }
-  var flash = list.filter(function (n) {
-    return n.indexOf('flash') >= 0 && n.indexOf('thinking') < 0 && n.indexOf('image') < 0;
-  });
-  return flash.length ? flash[0] : list[0];
+  Logger.log('Models usable with generateContent:\n  ' + names.join('\n  '));
+  return names;
 }
 
 function geminiFetch(key, model, body) {
@@ -962,21 +999,30 @@ function geminiCall(system, parts, people) {
     }
   };
 
+  // Model names get retired without notice, so walk candidates rather than
+  // failing on the first dead one: the replacement Google names in the error
+  // first, then whatever ListModels says this key can actually use.
+  var tried = [];
   var model = geminiModel();
-  var res = geminiFetch(key, model, body);
+  var res, code, text;
 
-  // Unknown model — ask Google what exists, cache it, retry once.
-  if (res.getResponseCode() === 404 || (res.getResponseCode() === 400 && /not found|not supported/i.test(res.getContentText()))) {
-    var found = findGeminiModel(key);
-    if (found && found !== model) {
-      props.setProperty('GEMINI_MODEL', found);
-      model = found;
-      res = geminiFetch(key, model, body);
+  for (var attempt = 0; attempt < 4; attempt++) {
+    tried.push(model);
+    res  = geminiFetch(key, model, body);
+    code = res.getResponseCode();
+    text = res.getContentText();
+
+    if (code === 200) {
+      if (props.getProperty('GEMINI_MODEL') !== model) props.setProperty('GEMINI_MODEL', model);
+      break;
     }
+    if (!isModelProblem(code, text)) break;
+
+    var next = suggestedModel(text, tried) || findGeminiModel(key, tried);
+    if (!next) break;
+    model = next;
   }
 
-  var code = res.getResponseCode();
-  var text = res.getContentText();
   if (code !== 200) {
     var msg = text;
     try { msg = JSON.parse(text).error.message; } catch (err) {}
@@ -985,6 +1031,11 @@ function geminiCall(system, parts, people) {
     }
     if (code === 429) {
       msg = 'Free tier limit reached for now. Wait a few minutes, or enter this one by hand.';
+    }
+    if (isModelProblem(code, text)) {
+      msg = 'No usable Gemini model found. Tried: ' + tried.join(', ') +
+            '. Run listGeminiModels() in the script editor to see what this key can use, ' +
+            'then set GEMINI_MODEL in Project Settings > Script Properties. Google said: ' + msg;
     }
     throw new Error('Gemini error ' + code + ': ' + msg);
   }
