@@ -104,13 +104,13 @@ real ones. Do this before adding expenses — splits are stored against names.
 
 **https://vlui93.github.io/trip-split/**
 
-If GitHub Pages is not already on, turn it on once:
+Pages is already enabled and serving from `main` / root — nothing to turn on.
+Pushes to `main` go live within a few seconds.
 
-1. Open <https://github.com/vlui93/trip-split/settings/pages>
-2. Under **Build and deployment → Source**, choose **Deploy from a branch**.
-3. Branch: **main**, folder: **/ (root)**. **Save**.
-4. Wait ~1 minute, then reload the URL above. The first build can take a couple
-   of minutes; after that, pushes go live in seconds.
+If it ever needs re-enabling (say the repo is recreated), do it once at
+<https://github.com/vlui93/trip-split/settings/pages>: under **Build and
+deployment → Source** choose **Deploy from a branch**, set branch **main** and
+folder **/ (root)**, and **Save**. The first build takes a minute or two.
 
 ## 5. Add it to the iPhone home screen
 
