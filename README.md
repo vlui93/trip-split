@@ -314,16 +314,33 @@ or delete anything. That is the intended model for three people on a trip
 together, not a permissions system. If someone loses their phone, run
 `resetToken()` in the script editor and reconnect the other two.
 
-**Renaming people is a shared action.** Names are the key that ties expenses to
-people, so if one person renames "Dan" to "Daniel", earlier expenses still say
-"Dan". The home screen will show both until you fix it. Agree the three names
-once at the start and leave them alone.
+**The roster is editable.** **More → People** adds and removes people, so a group
+of two or five works as well as three. Renaming is safe: names are the key tying
+an expense to a person, so a rename rewrites every reference — payer, split
+participants, exact and percentage shares, itemised line items, logged
+settlements, and this phone's "which one is you". Nothing is orphaned.
+
+Removing someone who appears on existing expenses warns you first and tells you
+how many. Their share stays on those expenses, so their balance keeps showing on
+the home screen until you edit or delete them — which is the honest outcome, and
+better than silently making their money disappear. Removing a person nobody has
+shared an expense with is clean.
+
+Since a roster change is shared, do it on one phone and let the others pull it
+in. Two people renaming the same person at once is last-write-wins, like any
+other edit.
 
 ---
 
 ## Exchange rates
 
-Rates are **AUD per one unit** of the currency, so 1 HKD ≈ 0.19 AUD.
+Rates read the way you'd say them out loud: **1 AUD = 5.23 HKD**. That is how
+they're shown everywhere and how you type an override.
+
+Internally the Sheet stores `rate_to_aud` (AUD per one foreign unit), because
+that is the number the conversion maths needs. The app flips it for display and
+flips your input back on save, keeping eight decimal places so a rate you type
+comes back exactly as you typed it.
 
 On load the backend fetches the day's rates from
 [open.er-api.com](https://open.er-api.com) — no API key — and caches them in the
@@ -332,8 +349,8 @@ is reused rather than re-fetched. [Frankfurter](https://frankfurter.app) is the
 fallback for HKD and CNY; because its ECB feed does not carry MOP, MOP is then
 derived from its de-facto 1.03 MOP : 1 HKD peg.
 
-To match your bank's actual rate, go to **More**, tap a currency, and enter your
-own. It is flagged **manual** in amber everywhere instead of **live** in green,
+To match your bank's actual rate, go to **More**, tap a currency, and enter how
+many of it one Australian dollar buys. It is flagged **manual** in amber everywhere instead of **live** in green,
 and the daily refresh will not touch it until you tap **Clear override**.
 
 **Expenses keep the rate they were saved with.** Changing a rate today does not

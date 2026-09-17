@@ -307,7 +307,7 @@ select{background-image:linear-gradient(45deg,transparent 50%,var(--muted) 50%),
 <section id="s-more" class="screen">
   <div class="topbar"><h1>Settings</h1></div>
 
-  <div class="section-label" style="margin-top:4px">Exchange rates · AUD per unit</div>
+  <div class="section-label" style="margin-top:4px">Exchange rates · per 1 AUD</div>
   <div class="card" id="ratesBox"></div>
   <button class="btn ghost full sm" id="refreshRates" style="margin-bottom:6px">Fetch today's live rates</button>
   <p class="sub">Live rates come from open.er-api.com (Frankfurter as backup) and are cached in the ExchangeRates tab for the day. A manual override sticks until you clear it.</p>
@@ -533,6 +533,13 @@ const money  = c => (c/100);
 const fmtAud = n => 'A$' + (Math.abs(n) < 0.005 ? '0.00' : Number(n).toFixed(2));
 const fmtAudC= c => fmtAud(money(c));
 const fmtCur = (n,cur) => (SYM[cur]||cur+' ') + Number(n||0).toFixed(2);
+/* The Sheet stores rate_to_aud (AUD per 1 foreign unit) because that is what the
+   conversion maths needs. People think the other way round — "1 AUD buys 5.23
+   HKD" — so every label and every input uses the inverse. Only these two
+   helpers know about the flip. */
+const perAud   = r => (r > 0 ? 1 / r : 0);
+const fmtPerAud = (cur, r, dp) => '1 AUD = ' + perAud(r).toFixed(dp == null ? 4 : dp) + ' ' + cur;
+
 function rateOf(cur){
   if (cur === 'AUD') return 1;
   const r = (S.rates||[]).find(x => x.currency === cur);
@@ -695,6 +702,7 @@ async function sync(force){
     const d = await call('bootstrap', {}, { refreshRates: !!force });
     S = { people:d.people||[], expenses:d.expenses||[], rates:d.rates||[],
           settlements:d.settlements||[], serverDate:d.serverDate||'' };
+    if (!pedDirty()) PED = null;     // keep an in-progress roster edit
     persist();
     renderAll();
   } catch(err){
@@ -864,6 +872,107 @@ function renderSettle(){
     : `<div class="empty">Nothing settled yet.</div>`;
 }
 
+/* ============================================================
+   Editing who is on the trip
+
+   Names are the key that ties an expense to a person, so a rename has to
+   rewrite every reference or the expense is orphaned and its share silently
+   stops counting. PED holds the in-progress edit so adding and removing rows
+   doesn't touch the saved list until you commit.
+   ============================================================ */
+
+let PED = null;
+
+function ensurePED(){
+  if (!PED) PED = S.people.map(n => ({ orig:n, val:n }));
+}
+function pedDirty(){
+  if (!PED) return false;
+  if (PED.length !== S.people.length) return true;
+  return PED.some((r,i) => r.val !== S.people[i]);
+}
+
+/** Rewrite every reference to an old name. Returns true if anything changed. */
+function remapExpense(ex, map){
+  let hit = false;
+  const sub = n => { if (map[n]){ hit = true; return map[n]; } return n; };
+
+  ex.paid_by = sub(ex.paid_by);
+
+  const d = ex.split_detail || {};
+  if (d.participants) d.participants = d.participants.map(sub);
+  if (d.shares){
+    const out = {};
+    Object.keys(d.shares).forEach(n => { out[sub(n)] = d.shares[n]; });
+    d.shares = out;
+  }
+  if (ex.items && ex.items.items){
+    ex.items.items.forEach(i => { i.people = (i.people || []).map(sub); });
+  }
+  return hit;
+}
+
+function savePeople(){
+  ensurePED();
+  const names = PED.map(r => r.val.trim());
+
+  if (names.some(n => !n)) { toast('Every person needs a name'); return; }
+  const lower = names.map(n => n.toLowerCase());
+  if (new Set(lower).size !== lower.length){ toast('Two people have the same name'); return; }
+  if (!names.length){ toast('Need at least one person'); return; }
+
+  // Renames, matched by row rather than by name.
+  const map = {};
+  PED.forEach((r,i) => { if (r.orig && r.orig !== names[i]) map[r.orig] = names[i]; });
+
+  // Anyone whose row is gone entirely.
+  const gone = S.people.filter(n => !PED.some(r => r.orig === n));
+  if (gone.length){
+    const used = gone.filter(n => involvedCount(n) > 0);
+    if (used.length){
+      const lines = used.map(n => `${n} is on ${involvedCount(n)} expense(s)`).join('\n');
+      if (!confirm(`${lines}\n\nRemoving them from the list does not remove them from those expenses — ` +
+                   `their balance will keep showing on the home screen until you delete or edit those expenses.\n\nRemove anyway?`)) return;
+    }
+  }
+
+  // Apply renames across everything that stores a name.
+  let touched = 0;
+  if (Object.keys(map).length){
+    (S.expenses || []).forEach(ex => {
+      if (remapExpense(ex, map)){ enqueue('updateExpense', ex); touched++; }
+    });
+    (S.settlements || []).forEach(st => {
+      if (map[st.from] || map[st.to]){
+        const old = st.id;
+        st.from = map[st.from] || st.from;
+        st.to   = map[st.to]   || st.to;
+        enqueue('deleteSettlement', { id: old });   // no updateSettlement action; replace it
+        enqueue('addSettlement', st);
+        touched++;
+      }
+    });
+    if (PREFS.me && map[PREFS.me]){ PREFS.me = map[PREFS.me]; save(K_PREFS, PREFS); }
+  }
+  if (PREFS.me && !names.includes(PREFS.me)){ PREFS.me = ''; save(K_PREFS, PREFS); }
+
+  S.people = names;
+  enqueue('setPeople', { people: names });
+  PED = null;
+  persist(); renderAll(); renderMore();
+
+  toast(touched ? `Saved — updated ${touched} record${touched > 1 ? 's' : ''}` : 'People saved');
+}
+
+/** How many expenses reference this person at all. */
+function involvedCount(name){
+  return (S.expenses || []).filter(ex => {
+    if (ex.paid_by === name) return true;
+    const sh = sharesOf(ex);
+    return (sh[name] || 0) > 0;
+  }).length;
+}
+
 /* ---------------- render: more ---------------- */
 
 function renderMore(){
@@ -874,9 +983,9 @@ function renderMore(){
       : m.manual  ? '<span class="tag manual">manual</span>'
       : m.stale   ? '<span class="tag stale">stale</span>'
       : '<span class="tag live">live</span>';
-    const sub = c === 'AUD' ? 'always 1.0000'
+    const sub = c === 'AUD' ? 'the base currency'
       : m.missing ? 'tap to set one manually'
-      : `1 ${c} = ${m.rate.toFixed(4)} AUD · ${m.manual ? 'your rate' : (m.day || 'unknown date')}`;
+      : `${fmtPerAud(c, m.rate)} · ${m.manual ? 'your rate' : (m.day || 'unknown date')}`;
     return `<div class="bal" ${c==='AUD'?'':`data-rate="${c}"`} style="${c==='AUD'?'':'cursor:pointer'}">
       <div class="av">${SYM[c]}</div>
       <div class="grow"><div style="font-weight:650">${c}</div>
@@ -885,9 +994,18 @@ function renderMore(){
     </div>`;
   }).join('');
 
-  $('#peopleBox').innerHTML = S.people.map((p,i) =>
-    `<div class="row"><input type="text" data-person="${i}" value="${esc(p)}"></div>`).join('')
-    + `<button class="btn ghost full sm" id="savePeople">Save names</button>`;
+  ensurePED();
+  $('#peopleBox').innerHTML =
+    PED.map((r,i) => `
+      <div class="row" style="margin-bottom:8px">
+        <div class="av">${esc(initials(r.val) || '?')}</div>
+        <input class="grow" type="text" data-person="${i}" value="${esc(r.val)}"
+               placeholder="Name" autocapitalize="words" autocorrect="off">
+        <button class="iconbtn" data-prm="${i}" title="Remove"${PED.length < 2 ? ' disabled' : ''}>×</button>
+      </div>`).join('')
+    + `<button class="btn ghost full sm" id="addPerson" style="margin-bottom:8px">+ Add person</button>
+       <button class="btn primary full sm" id="savePeople">Save people</button>
+       ${pedDirty() ? '<button class="btn ghost full sm" id="cancelPeople" style="margin-top:8px">Discard changes</button>' : ''}`;
 
   $('#meBox').innerHTML =
     `<label class="fl">Which one is you?</label>
@@ -1000,7 +1118,7 @@ function renderForm(){
   $('#exAud').textContent = '≈ ' + fmtAud(formAmount() * (m.rate || 0));
   $('#exRateTag').className = 'tag ' + (F.cur==='AUD' ? '' : m.missing||m.stale ? 'stale' : m.manual ? 'manual' : 'live');
   $('#exRateTag').textContent = F.cur === 'AUD' ? 'base'
-    : m.missing ? 'no rate' : `1 ${F.cur} = ${m.rate.toFixed(4)} · ${m.manual?'manual':'live'}`;
+    : m.missing ? 'no rate' : `${fmtPerAud(F.cur, m.rate, 2)} · ${m.manual?'manual':'live'}`;
 
   $$('#exSplitType button').forEach(b => b.classList.toggle('on', b.dataset.st === F.split_type));
   renderSplitBody();
@@ -1178,7 +1296,7 @@ function openDetail(id){
       <div class="split-line"><span>City</span><b>${esc(ex.city||'—')}</b></div>
       <div class="split-line"><span>Paid by</span><b>${esc(ex.paid_by)}</b></div>
       <div class="split-line"><span>Split</span><b>${esc(splitLabel(ex.split_type))}</b></div>
-      <div class="split-line"><span>Rate used</span><b class="mono">1 ${esc(ex.currency)} = ${rate ? rate.toFixed(4) : '—'} AUD</b></div>
+      <div class="split-line"><span>Rate used</span><b class="mono">${rate ? esc(fmtPerAud(ex.currency, rate)) : '—'}</b></div>
     </div>
     ${itemHtml}
     <div class="section-label">Share</div>
@@ -1194,27 +1312,31 @@ function openRate(cur){
   rateCur = cur;
   const m = rateMeta(cur);
   $('#rateTitle').textContent = cur + ' rate';
-  $('#rateLbl').textContent = `AUD per 1 ${cur}`;
-  $('#rateVal').value = m.rate ? m.rate.toFixed(4) : '';
+  $('#rateLbl').textContent = `${cur} per 1 AUD`;
+  $('#rateVal').value = m.rate ? perAud(m.rate).toFixed(4) : '';
   $('#rateHelp').innerHTML = m.missing
-    ? 'No rate cached yet.'
+    ? 'No rate cached yet. Enter how many ' + esc(cur) + ' one Australian dollar buys.'
     : `Currently ${m.manual ? 'a manual override you set' : 'the live rate'} from ${esc(m.day || 'an unknown date')}. ` +
-      `At this rate ${fmtCur(100,cur)} is ${fmtAud(100*m.rate)}. Past expenses keep the rate they were saved with.`;
+      `At this rate ${fmtAud(100)} buys ${fmtCur(100 * perAud(m.rate), cur)}, and ${fmtCur(100,cur)} costs ${fmtAud(100*m.rate)}. ` +
+      `Past expenses keep the rate they were saved with.`;
   $('#rateClear').style.display = m.manual ? '' : 'none';
   openSheet('rateSheet');
 }
 
 function saveRate(){
-  const v = Number($('#rateVal').value);
-  if (!(v > 0)){ toast('Enter a rate above 0'); return; }
+  const entered = Number($('#rateVal').value);     // foreign units per 1 AUD
+  if (!(entered > 0)){ toast('Enter a rate above 0'); return; }
+  // Keep plenty of precision so flipping it back for display doesn't drift.
+  const v = Math.round((1 / entered) * 1e8) / 1e8;
   S.rates = CURS.map(c => {
     const ex = (S.rates||[]).find(r => r.currency === c) || { currency:c, rate_to_aud:c==='AUD'?1:0, last_updated:'', is_manual_override:false };
     return c === rateCur
-      ? { currency:c, rate_to_aud:round4(v), last_updated:today(), is_manual_override:true }
+      ? { currency:c, rate_to_aud:v, last_updated:today(), is_manual_override:true }
       : ex;
   });
-  enqueue('setRate', { currency:rateCur, rate_to_aud:round4(v) });
-  persist(); renderMore(); closeSheet('rateSheet'); toast(rateCur + ' set manually');
+  enqueue('setRate', { currency:rateCur, rate_to_aud:v });
+  persist(); renderMore(); closeSheet('rateSheet');
+  toast('1 AUD = ' + entered + ' ' + rateCur);
 }
 const round4 = n => Math.round(Number(n)*10000)/10000;
 
@@ -1262,7 +1384,7 @@ function unsettle(id){
 
 document.addEventListener('click', e => {
   const t = e.target.closest('[data-go],[data-close],[data-ex],[data-city],[data-paid],[data-part],' +
-    '[data-st],[data-fc],[data-fp],[data-rate],[data-pay],[data-unsettle],[data-editex],[data-ip],[data-idel],[data-me]');
+    '[data-st],[data-fc],[data-fp],[data-rate],[data-pay],[data-unsettle],[data-editex],[data-ip],[data-idel],[data-me],[data-prm]');
   if (!t) return;
   const d = t.dataset;
 
@@ -1286,6 +1408,10 @@ document.addEventListener('click', e => {
   else if (d.me !== undefined && t.hasAttribute('data-me')){
     PREFS.me = (PREFS.me === d.me) ? '' : d.me;
     save(K_PREFS, PREFS); renderMore(); renderHome();
+  }
+  else if (d.prm !== undefined && t.hasAttribute('data-prm')){
+    ensurePED();
+    if (PED.length > 1){ PED.splice(Number(d.prm), 1); renderMore(); }
   }
   else if (d.rate) { openRate(d.rate); }
   else if (d.pay !== undefined && t.hasAttribute('data-pay')){ openPay(Number(d.pay)); }
@@ -1314,12 +1440,9 @@ document.addEventListener('click', e => {
     S.people.forEach((p,i) => bag[p] = i === n-1 ? round2(target - base*(n-1)) : base);
     renderSplitBody(); renderPreview();
   }
-  if (e.target.id === 'savePeople'){
-    const names = $$('[data-person]').map(i => i.value.trim()).filter(Boolean);
-    if (!names.length){ toast('Need at least one name'); return; }
-    S.people = names; enqueue('setPeople', { people:names });
-    persist(); renderAll(); renderMore(); toast('Names saved');
-  }
+  if (e.target.id === 'savePeople')   savePeople();
+  if (e.target.id === 'addPerson'){ ensurePED(); PED.push({ orig:null, val:'' }); renderMore(); }
+  if (e.target.id === 'cancelPeople'){ PED = null; renderMore(); toast('Changes discarded'); }
 });
 
 document.addEventListener('input', e => {
@@ -1332,6 +1455,12 @@ document.addEventListener('input', e => {
     const bag = F.split_type === 'exact' ? F.exact : F.percent;
     bag[el.dataset.share] = el.value.replace(/[^0-9.]/g,'');
     updateRemaining(); renderPreview();
+  }
+  else if (el.dataset.person !== undefined && PED){
+    const i = Number(el.dataset.person);
+    PED[i].val = el.value;
+    const av = el.previousElementSibling;
+    if (av && av.classList.contains('av')) av.textContent = initials(el.value) || '?';
   }
   else if (el.dataset.iname !== undefined && F){ F.items[Number(el.dataset.iname)].name = el.value; }
   else if (el.dataset.iamt !== undefined && F){
