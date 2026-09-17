@@ -284,6 +284,7 @@ select{background-image:linear-gradient(45deg,transparent 50%,var(--muted) 50%),
   <div class="card stack">
     <div class="row between"><span style="font-size:14px;color:var(--muted)">Backend</span><span class="tag mono ellip" id="cfgUrlShown" style="max-width:60%">—</span></div>
     <div class="row between"><span style="font-size:14px;color:var(--muted)">Unsynced changes</span><span class="tag mono" id="queueCount">0</span></div>
+    <div class="row between"><span style="font-size:14px;color:var(--muted)">Receipt scanning</span><span class="tag" id="aiWho">off</span></div>
     <button class="btn ghost full sm" id="forceSync">Sync now</button>
     <button class="btn danger full sm" id="cfgClear">Disconnect this device</button>
   </div>
@@ -422,7 +423,7 @@ select{background-image:linear-gradient(45deg,transparent 50%,var(--muted) 50%),
       <button class="btn primary full" id="btnPickPhoto">Take photo or choose image</button>
       <input id="photoInput" type="file" accept="image/*" capture="environment" style="display:none">
     </div>
-    <p class="sub">The photo is read once and not stored anywhere — only the expense it produces is saved.</p>
+    <p class="sub" id="scanPrivacy">The photo is read once — only the expense it produces is saved.</p>
   </div>
 </div>
 
@@ -847,6 +848,14 @@ function renderMore(){
 
   $('#cfgUrlShown').textContent = CFG && CFG.url ? CFG.url.replace(/^https:\/\//,'').slice(0,34) + '…' : '—';
   $('#queueCount').textContent = QUEUE.length;
+
+  const who = $('#aiWho');
+  if (who){
+    who.textContent = AI_WHO === 'gemini' ? 'Gemini · free'
+                    : AI_WHO === 'claude' ? 'Claude'
+                    : 'off';
+    who.className = 'tag ' + (AI_WHO ? 'live' : '');
+  }
 }
 
 function renderAll(){ renderHome(); renderSync();
@@ -1354,7 +1363,7 @@ window.addEventListener('scroll', () => {
    prefills the form — nothing is saved until you tap Save.
    ============================================================ */
 
-let AI_ON = false;
+let AI_ON = false, AI_WHO = '';
 
 function showAiBar(){
   const bar = $('#aiBar');
@@ -1365,9 +1374,9 @@ async function checkAi(){
   if (!CFG || !CFG.url) return;
   try {
     const d = await call('aiStatus', {});
-    AI_ON = !!d.ai;
+    AI_ON = !!d.ai; AI_WHO = d.provider || '';
   } catch(err){
-    AI_ON = false;      // offline or not set up — the manual form still works
+    AI_ON = false; AI_WHO = '';   // offline or not set up — the manual form still works
   }
   showAiBar();
 }
@@ -1508,7 +1517,16 @@ function aiError(err){
   return err.message || String(err);
 }
 
-$('#btnScan').addEventListener('click', () => { $('#scanHint').value = ''; openSheet('scanSheet'); });
+$('#btnScan').addEventListener('click', () => {
+  $('#scanHint').value = '';
+  $('#scanPrivacy').textContent = AI_WHO === 'gemini'
+    ? 'The photo is read once and not stored by this app — only the expense it produces is saved. '
+      + "It does go to Google's free AI tier, where images may be used to improve their models, so avoid "
+      + 'photographing anything you would not want read.'
+    : 'The photo is read once and not stored — only the expense it produces is saved. '
+      + 'Anthropic does not train on API traffic.';
+  openSheet('scanSheet');
+});
 $('#btnSay').addEventListener('click',  () => { $('#sayText').value  = ''; openSheet('saySheet'); });
 $('#btnPickPhoto').addEventListener('click', () => $('#photoInput').click());
 $('#btnSayGo').addEventListener('click', runSay);

@@ -13,7 +13,8 @@ GitHub Pages; all data lives in a Google Sheet behind an Apps Script Web App.
 - **Settle Up:** computes the fewest transactions that clear every balance, so a
   chain like A owes B $40 and B owes C $40 collapses to A pays C $40.
 - **Receipt photos and plain English:** optional — photograph a bill or describe
-  it (dictation works) and Claude fills the form in for you to check. See §6.
+  it (dictation works) and it fills the form in for you to check. Runs on
+  Gemini's free tier or on Claude. See §6.
 - **Offline-first:** every change is written to the phone first and pushed to the
   Sheet when Google is reachable. This matters — see the mainland China note below.
 
@@ -178,45 +179,77 @@ Two extra ways to add an expense, both off by default:
 Both land in the normal add-expense form for you to check. **Nothing is saved
 until you tap Save**, and you can edit every field first.
 
-### Turning them on
+### Turning them on — free option
 
-They need an Anthropic API key, which is **pay-as-you-go and separate from any
-Claude subscription** — a Claude Pro or Max plan does not include API credit.
+They need an AI key. **Google AI Studio's free tier needs no credit card** and is
+the default choice here.
 
-1. Get a key at <https://console.anthropic.com> → API keys. Add a little credit.
+1. Go to <https://aistudio.google.com/apikey>, sign in, **Create API key**. Copy it
+   (it starts `AIza`).
 2. In the Apps Script editor, add this temporarily at the bottom of `Code.gs`:
    ```js
-   function connectClaude() { setApiKey('sk-ant-PASTE_YOURS_HERE'); }
+   function connectAI() { setGeminiKey('AIza_PASTE_YOURS_HERE'); }
    ```
-3. Select **`connectClaude`** in the function dropdown, **Run**, then delete the
+3. Select **`connectAI`** in the function dropdown, **Run**, then delete the
    function again. The key is now in script properties.
-4. Reopen the app. The two buttons appear at the top of the add-expense sheet.
+4. Run **`testAi`** from the same dropdown. It parses a sample sentence and prints
+   the result to the execution log — so you can confirm the key works without
+   photographing anything.
+5. Reopen the app. The two buttons appear at the top of the add-expense sheet, and
+   **More** shows `Gemini · free`.
 
-`clearApiKey()` turns the features back off; the buttons disappear on their own.
+Free-tier limits are per-minute and per-day and sit far above what a trip needs —
+a few dozen receipts a day is not close. If you do hit one, the app says so and
+you enter that expense by hand.
 
-### What it costs
+**Model names drift.** If the one in `GEMINI_MODELS` has been retired, the code
+asks Google for the current list, picks a suitable flash model, and remembers it.
+You should not have to touch it.
 
-Roughly **3–6 cents per receipt** and about **a cent** per typed description, on
-`claude-opus-5`. A whole trip of daily receipts runs to a couple of dollars. To
-spend less, change `CLAUDE_MODEL` in `Code.gs` to `claude-sonnet-5`, which is
-cheaper and still reads receipts well.
+### The trade-off
 
-The request runs at `effort: "low"` — this is extraction, not hard reasoning, and
-low effort keeps the round trip inside Apps Script's fetch timeout. Server-side
-refusal fallbacks are enabled, so a declined request retries on another model
-inside the same call rather than failing; if the API rejects that beta flag, the
-code retries once without it so the feature can't break on a flag change.
+Free tier means **Google may use what you send to improve their models**. For
+restaurant receipts that is probably fine, but it is your call — the app says so
+on the scan screen rather than burying it here. Avoid photographing anything with
+a full card number. Google's paid tier drops the training use and still costs
+well under a cent per receipt.
 
-### Where the key lives
+### Paid option — Claude
 
-In the **script's** properties, on Google's side. The phone never sees it and it
-is not in this repo. The photo goes phone → your Apps Script → Anthropic; it is
-read once and never stored — only the expense it produces is saved.
+Better at messy receipts and mixed Chinese/English, and Anthropic does not train
+on API traffic. Roughly **3–6 cents per receipt**, pay-as-you-go, **separate from
+any Claude subscription** — Pro and Max do not include API credit.
+
+1. Get a key at <https://console.anthropic.com> → API keys, add a little credit.
+2. Same as above, but `setApiKey('sk-ant-...')`.
+
+If both keys are set, Claude is used. `clearApiKey()` drops back to Gemini;
+`clearGeminiKey()` turns everything off. The buttons disappear on their own when
+no key is set.
+
+### How it runs
+
+| | Gemini | Claude |
+|---|---|---|
+| Model | `gemini-2.5-flash` (auto-corrected if retired) | `claude-opus-5` |
+| Structured output | `responseSchema` (OpenAPI subset) | `output_config.format` JSON Schema |
+| Cost | free tier | ~3–6c per receipt |
+| Trains on your data | yes, on the free tier | no |
+
+One schema is defined once and converted for Gemini — types upper-cased,
+`additionalProperties` dropped, `propertyOrdering` added — rather than maintained
+twice. Claude runs at `effort: "low"`; this is extraction, not hard reasoning, and
+low effort keeps the round trip inside Apps Script's fetch timeout. Claude also
+has server-side refusal fallbacks enabled, retrying once without that beta flag if
+the API rejects it.
 
 ### What it won't do
 
-These need a live connection to both Google and Anthropic, so they will not work
-in mainland China without a VPN. Everything else in the app still works offline —
+Either key lives in the **script's** properties on Google's side — the phone never
+sees it, and it is not in this repo.
+
+These need a live connection, so they will not work in mainland China without a
+VPN. Note that with Gemini both hops are Google, so one VPN covers it. Everything else in the app still works offline —
 type the expense in by hand and it queues like any other change.
 
 ---
@@ -300,7 +333,7 @@ Apps Script cannot answer a preflight) shaped as
 | `refreshRates` | — | all rates |
 | `addSettlement` | settlement object | the settlement |
 | `deleteSettlement` | `{ id }` | the id |
-| `aiStatus` | — | `{ ai: true/false }` — whether an API key is set |
+| `aiStatus` | — | `{ ai: true/false, provider: 'gemini'\|'claude'\|'' }` |
 | `parseReceipt` | `{ image, mediaType, city, currency, defaultPayer, hint }` | a draft expense |
 | `parseText` | `{ text, city, currency, defaultPayer }` | a draft expense |
 

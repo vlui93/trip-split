@@ -186,7 +186,7 @@ function handle(e, req) {
   if (action === 'aiStatus' || action === 'parseReceipt' || action === 'parseText') {
     try {
       var aiOut;
-      if (action === 'aiStatus')          aiOut = { ai: aiEnabled() };
+      if (action === 'aiStatus')          aiOut = { ai: aiEnabled(), provider: aiProvider() };
       else if (action === 'parseReceipt') aiOut = { draft: parseReceipt(payload) };
       else                                aiOut = { draft: parseText(payload) };
       aiOut.ok = true;
@@ -616,22 +616,73 @@ function clearOverride(currency) {
 var CLAUDE_MODEL = 'claude-opus-5';
 var CLAUDE_URL   = 'https://api.anthropic.com/v1/messages';
 
+// Gemini's free tier needs no card. Model names drift, so this is only the first
+// guess — findGeminiModel() asks Google what actually exists if it 404s.
+var GEMINI_MODELS = ['gemini-2.5-flash', 'gemini-2.0-flash', 'gemini-flash-latest'];
+var GEMINI_BASE   = 'https://generativelanguage.googleapis.com/v1beta';
+
+/** Anthropic — paid, best receipt reading. */
 function setApiKey(key) {
   key = String(key || '').trim();
   if (!key) throw new Error('Pass your Anthropic API key, e.g. setApiKey("sk-ant-...")');
   PropertiesService.getScriptProperties().setProperty('ANTHROPIC_API_KEY', key);
-  Logger.log('Anthropic API key saved. Receipt scanning and describe-it are now enabled.');
+  Logger.log('Anthropic key saved. Receipt scanning and describe-it are on, using Claude.');
   return 'ok';
 }
 
 function clearApiKey() {
   PropertiesService.getScriptProperties().deleteProperty('ANTHROPIC_API_KEY');
-  Logger.log('Anthropic API key removed. The AI features will switch themselves off.');
+  Logger.log('Anthropic key removed.');
   return 'ok';
 }
 
-function aiEnabled() {
-  return !!PropertiesService.getScriptProperties().getProperty('ANTHROPIC_API_KEY');
+/** Google AI Studio — free tier, no card. Get one at aistudio.google.com/apikey */
+function setGeminiKey(key) {
+  key = String(key || '').trim();
+  if (!key) throw new Error('Pass your Google AI Studio key, e.g. setGeminiKey("AIza...")');
+  var props = PropertiesService.getScriptProperties();
+  props.setProperty('GEMINI_API_KEY', key);
+  props.deleteProperty('GEMINI_MODEL');   // re-discover on next use
+  Logger.log('Gemini key saved. Receipt scanning and describe-it are on, using Gemini (free tier).');
+  return 'ok';
+}
+
+function clearGeminiKey() {
+  var props = PropertiesService.getScriptProperties();
+  props.deleteProperty('GEMINI_API_KEY');
+  props.deleteProperty('GEMINI_MODEL');
+  Logger.log('Gemini key removed.');
+  return 'ok';
+}
+
+/**
+ * Which provider to use. Claude wins if both keys are set, because it reads
+ * receipts better; delete the Anthropic key to fall back to the free tier.
+ */
+function aiProvider() {
+  var props = PropertiesService.getScriptProperties();
+  if (props.getProperty('ANTHROPIC_API_KEY')) return 'claude';
+  if (props.getProperty('GEMINI_API_KEY'))    return 'gemini';
+  return '';
+}
+
+function aiEnabled() { return !!aiProvider(); }
+
+/** Run this in the editor to check a key works, without photographing anything. */
+function testAi() {
+  var who = aiProvider();
+  if (!who) {
+    Logger.log('No AI key set. Run setGeminiKey("AIza...") for the free option, ' +
+               'or setApiKey("sk-ant-...") for Claude.');
+    return 'no key';
+  }
+  Logger.log('Provider: ' + who);
+  var draft = parseText({
+    text: 'Dinner in Chengdu, 396 yuan, Victor paid, split evenly',
+    city: 'Chengdu', currency: 'CNY'
+  });
+  Logger.log('Parsed OK: ' + JSON.stringify(draft, null, 2));
+  return draft;
 }
 
 /** The shape every parse returns. All fields required so the schema stays strict. */
@@ -720,11 +771,42 @@ function draftSystemPrompt(people, city, currency, defaultPayer, todayStr) {
  * no Anthropic SDK. Retries once without the fallback beta if the API rejects it,
  * so an unfamiliar beta flag can never take the feature down.
  */
-function claudeDraft(userContent, people, city, currency, defaultPayer) {
-  var key = PropertiesService.getScriptProperties().getProperty('ANTHROPIC_API_KEY');
-  if (!key) throw new Error('AI features are off. Run setApiKey("sk-ant-...") in the script editor to turn them on.');
+/** Provider-agnostic entry point. Both paths return the same normalised draft. */
+function aiDraft(parts, people, city, currency, defaultPayer) {
+  var who = aiProvider();
+  if (!who) {
+    throw new Error('AI features are off. Run setGeminiKey("AIza...") for the free option, ' +
+                    'or setApiKey("sk-ant-...") for Claude.');
+  }
+  var system = draftSystemPrompt(people, city, currency, defaultPayer, ymd(new Date()));
+  var raw = (who === 'gemini')
+    ? geminiCall(system, parts, people)
+    : claudeCall(system, parts, people);
 
-  var todayStr = ymd(new Date());
+  var draft;
+  try {
+    draft = JSON.parse(raw);
+  } catch (err) {
+    throw new Error('Could not read the model\u2019s reply as JSON. Try again, or enter it by hand.');
+  }
+  return normaliseDraft(draft, people, currency, city);
+}
+
+/**
+ * `parts` is a neutral list: {text} and/or {image: base64, mediaType}.
+ * Each provider renders it into its own content shape.
+ */
+function claudeContent(parts) {
+  return parts.map(function (p) {
+    return p.image
+      ? { type: 'image', source: { type: 'base64', media_type: p.mediaType, data: p.image } }
+      : { type: 'text', text: p.text };
+  });
+}
+
+function claudeCall(system, parts, people) {
+  var key = PropertiesService.getScriptProperties().getProperty('ANTHROPIC_API_KEY');
+  var userContent = claudeContent(parts);
   var body = {
     model: CLAUDE_MODEL,
     max_tokens: 4000,
@@ -767,13 +849,7 @@ function claudeDraft(userContent, people, city, currency, defaultPayer) {
   (data.content || []).forEach(function (b) { if (b.type === 'text') out += b.text; });
   if (!out) throw new Error('Claude returned nothing to read. Try again, or enter it by hand.');
 
-  var draft;
-  try {
-    draft = JSON.parse(out);
-  } catch (err) {
-    throw new Error('Could not read Claude’s reply as JSON. Try again, or enter it by hand.');
-  }
-  return normaliseDraft(draft, people, currency, city);
+  return out;
 }
 
 function claudeFetch(key, body, withFallback) {
@@ -790,6 +866,146 @@ function claudeFetch(key, body, withFallback) {
     payload: JSON.stringify(body),
     muteHttpExceptions: true
   });
+}
+
+/* ------------------------------------------------------------------ *
+ * Gemini (Google AI Studio free tier)
+ * ------------------------------------------------------------------ */
+
+/**
+ * Gemini takes an OpenAPI-subset schema, not JSON Schema: types are upper-case
+ * enum names and additionalProperties is not allowed. Convert rather than
+ * maintaining a second copy of the schema.
+ */
+function toGeminiSchema(node) {
+  if (!node || typeof node !== 'object') return node;
+
+  var out = {};
+  if (node.type) out.type = String(node.type).toUpperCase();
+  if (node.description) out.description = node.description;
+  if (node.enum) out.enum = node.enum.slice();
+  if (node.items) out.items = toGeminiSchema(node.items);
+
+  if (node.properties) {
+    out.properties = {};
+    Object.keys(node.properties).forEach(function (k) {
+      out.properties[k] = toGeminiSchema(node.properties[k]);
+    });
+    // Fixing the order makes the model fill fields in a sensible sequence.
+    out.propertyOrdering = Object.keys(node.properties);
+  }
+  if (node.required) out.required = node.required.slice();
+  return out;   // additionalProperties deliberately dropped
+}
+
+function geminiContent(parts) {
+  return parts.map(function (p) {
+    return p.image
+      ? { inline_data: { mime_type: p.mediaType, data: p.image } }
+      : { text: p.text };
+  });
+}
+
+/**
+ * Model names move. Try the stored/default one; if Google says it does not
+ * exist, ask for the list, pick a flash model that can generateContent, and
+ * remember it.
+ */
+function geminiModel() {
+  return PropertiesService.getScriptProperties().getProperty('GEMINI_MODEL') || GEMINI_MODELS[0];
+}
+
+function findGeminiModel(key) {
+  var res = UrlFetchApp.fetch(GEMINI_BASE + '/models?key=' + encodeURIComponent(key) + '&pageSize=200',
+    { muteHttpExceptions: true });
+  if (res.getResponseCode() !== 200) return null;
+
+  var list = (JSON.parse(res.getContentText()).models || []).filter(function (m) {
+    return (m.supportedGenerationMethods || []).indexOf('generateContent') >= 0;
+  }).map(function (m) {
+    return String(m.name || '').replace(/^models\//, '');
+  });
+  if (!list.length) return null;
+
+  // Prefer one of the known-good names, then any flash model, then anything.
+  for (var i = 0; i < GEMINI_MODELS.length; i++) {
+    if (list.indexOf(GEMINI_MODELS[i]) >= 0) return GEMINI_MODELS[i];
+  }
+  var flash = list.filter(function (n) {
+    return n.indexOf('flash') >= 0 && n.indexOf('thinking') < 0 && n.indexOf('image') < 0;
+  });
+  return flash.length ? flash[0] : list[0];
+}
+
+function geminiFetch(key, model, body) {
+  return UrlFetchApp.fetch(
+    GEMINI_BASE + '/models/' + encodeURIComponent(model) + ':generateContent?key=' + encodeURIComponent(key),
+    {
+      method: 'post',
+      contentType: 'application/json',
+      payload: JSON.stringify(body),
+      muteHttpExceptions: true
+    });
+}
+
+function geminiCall(system, parts, people) {
+  var props = PropertiesService.getScriptProperties();
+  var key = props.getProperty('GEMINI_API_KEY');
+
+  var body = {
+    systemInstruction: { parts: [{ text: system }] },
+    contents: [{ role: 'user', parts: geminiContent(parts) }],
+    generationConfig: {
+      temperature: 0,
+      responseMimeType: 'application/json',
+      responseSchema: toGeminiSchema(draftSchema(people))
+    }
+  };
+
+  var model = geminiModel();
+  var res = geminiFetch(key, model, body);
+
+  // Unknown model — ask Google what exists, cache it, retry once.
+  if (res.getResponseCode() === 404 || (res.getResponseCode() === 400 && /not found|not supported/i.test(res.getContentText()))) {
+    var found = findGeminiModel(key);
+    if (found && found !== model) {
+      props.setProperty('GEMINI_MODEL', found);
+      model = found;
+      res = geminiFetch(key, model, body);
+    }
+  }
+
+  var code = res.getResponseCode();
+  var text = res.getContentText();
+  if (code !== 200) {
+    var msg = text;
+    try { msg = JSON.parse(text).error.message; } catch (err) {}
+    if (code === 400 && /API key not valid/i.test(msg)) {
+      msg = 'Google rejected the key. Re-run setGeminiKey with a valid AI Studio key.';
+    }
+    if (code === 429) {
+      msg = 'Free tier limit reached for now. Wait a few minutes, or enter this one by hand.';
+    }
+    throw new Error('Gemini error ' + code + ': ' + msg);
+  }
+
+  var data = JSON.parse(text);
+  var cand = (data.candidates || [])[0];
+
+  if (!cand) {
+    var blocked = data.promptFeedback && data.promptFeedback.blockReason;
+    throw new Error(blocked
+      ? 'Gemini declined that image (' + blocked + '). Enter the expense by hand.'
+      : 'Gemini returned nothing. Try again, or enter it by hand.');
+  }
+  if (cand.finishReason && cand.finishReason !== 'STOP' && cand.finishReason !== 'MAX_TOKENS') {
+    throw new Error('Gemini stopped early (' + cand.finishReason + '). Enter the expense by hand.');
+  }
+
+  var out = '';
+  (((cand.content || {}).parts) || []).forEach(function (pt) { if (pt.text) out += pt.text; });
+  if (!out) throw new Error('Gemini returned nothing to read. Try again, or enter it by hand.');
+  return out;
 }
 
 /** Trust nothing from the model: clamp names, currency and numbers to what the app allows. */
@@ -856,11 +1072,11 @@ function parseReceipt(p) {
   var media = String(p.mediaType || 'image/jpeg');
   if (['image/jpeg', 'image/png', 'image/webp', 'image/gif'].indexOf(media) < 0) media = 'image/jpeg';
 
-  var content = [
-    { type: 'image', source: { type: 'base64', media_type: media, data: b64 } },
-    { type: 'text', text: receiptPrompt(p) }
+  var parts = [
+    { image: b64, mediaType: media },
+    { text: receiptPrompt(p) }
   ];
-  return claudeDraft(content, people, p.city, p.currency, p.defaultPayer || people[0]);
+  return aiDraft(parts, people, p.city, p.currency, p.defaultPayer || people[0]);
 }
 
 function receiptPrompt(p) {
@@ -879,9 +1095,8 @@ function parseText(p) {
   var text = String(p.text || '').trim();
   if (!text) throw new Error('Nothing to read — say or type what the expense was.');
 
-  var content = [{
-    type: 'text',
+  var parts = [{
     text: 'Turn this description into one expense:\n\n"' + text.slice(0, 2000) + '"'
   }];
-  return claudeDraft(content, people, p.city, p.currency, p.defaultPayer || people[0]);
+  return aiDraft(parts, people, p.city, p.currency, p.defaultPayer || people[0]);
 }
