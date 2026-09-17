@@ -32,15 +32,26 @@ GitHub Pages; all data lives in a Google Sheet behind an Apps Script Web App.
    to that Sheet — that is what makes `setup()` able to find it.
 3. Select all of the placeholder code and delete it, paste in the whole of
    [`Code.gs`](Code.gs) from this repo, and save (⌘S).
-4. In the function dropdown at the top, pick **`setup`** and click **Run**.
+4. In the function dropdown at the top of the editor, **explicitly select
+   `setup`** — the dropdown defaults to whichever function is first in the file,
+   so check it actually says `setup` before you click **Run**. Running the wrong
+   function usually does nothing at all and reports success.
+
+   Then click **Run**.
    - Google will ask you to authorize the script. This step has to be done by
      you, in the browser — it cannot be scripted. Choose your account, click
      **Advanced → Go to (project name) (unsafe)**, then **Allow**. The "unsafe"
      warning is just because the script is unpublished and yours alone.
    - `setup()` creates the four tabs with their headers, seeds three placeholder
      people and the four currency rows, generates an API token, and shows it.
-5. Copy the API token from the dialog (or from **View → Logs**). If you lose it,
-   run `showToken()` again.
+5. Copy the API token from the dialog. If you clicked past it, everything
+   `setup()` did is also printed in the **execution log** at the bottom of the
+   editor — the Sheet name, the tabs created, the people, and the token. If you
+   lose it later, run `showToken()` again.
+
+**How to tell it worked:** the execution log ends with `API TOKEN: ...`, and your
+Sheet has four tabs along the bottom. If the log just says "Execution completed"
+with nothing above it, you ran a different function — check the dropdown.
 
 ### Already started at script.google.com?
 

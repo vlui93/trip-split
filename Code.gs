@@ -28,6 +28,78 @@ HEADERS[SHEET_RATES]       = ['currency', 'rate_to_aud', 'last_updated', 'is_man
 HEADERS[SHEET_SETTLEMENTS] = ['id', 'from', 'to', 'amount_aud', 'date', 'note'];
 
 /* ------------------------------------------------------------------ *
+ * One-time setup
+ * ------------------------------------------------------------------ */
+
+function setup() {
+  var ss = book();
+
+  Object.keys(HEADERS).forEach(function (name) {
+    var sh = ss.getSheetByName(name);
+    if (!sh) sh = ss.insertSheet(name);
+    var hdr = HEADERS[name];
+    sh.getRange(1, 1, 1, hdr.length).setValues([hdr]).setFontWeight('bold');
+    sh.setFrozenRows(1);
+  });
+
+  // Remove the default empty "Sheet1" if it is still pristine.
+  var def = ss.getSheetByName('Sheet1');
+  if (def && ss.getSheets().length > 1 && def.getLastRow() === 0) ss.deleteSheet(def);
+
+  // Seed people only if empty.
+  var people = ss.getSheetByName(SHEET_PEOPLE);
+  if (people.getLastRow() < 2) {
+    people.getRange(2, 1, 3, 1).setValues([['Victor'], ['Person 2'], ['Person 3']]);
+  }
+
+  // Seed rate rows only if empty.
+  var rates = ss.getSheetByName(SHEET_RATES);
+  if (rates.getLastRow() < 2) {
+    rates.getRange(2, 1, CURRENCIES.length, 4).setValues(CURRENCIES.map(function (c) {
+      return [c, c === 'AUD' ? 1 : '', '', false];
+    }));
+  }
+
+  // Generate an API token if there isn't one.
+  var props = PropertiesService.getScriptProperties();
+  if (!props.getProperty('API_TOKEN')) {
+    props.setProperty('API_TOKEN', Utilities.getUuid().replace(/-/g, ''));
+  }
+
+  var token = props.getProperty('API_TOKEN');
+
+  // The execution log is the one place output always lands, whether or not the
+  // Sheet's UI is available to show a dialog.
+  Logger.log('setup() finished on "' + ss.getName() + '"');
+  Logger.log('Tabs ready: ' + Object.keys(HEADERS).join(', '));
+  Logger.log('People: ' + getPeople().join(', '));
+  Logger.log('');
+  Logger.log('API TOKEN: ' + token);
+  Logger.log('');
+  Logger.log('Next: Deploy > New deployment > Web app, Execute as Me, Who has access Anyone.');
+
+  showToken();
+  return 'setup complete — token: ' + token;
+}
+
+function showToken() {
+  var t = PropertiesService.getScriptProperties().getProperty('API_TOKEN');
+  Logger.log('API TOKEN: ' + t);
+  try {
+    SpreadsheetApp.getUi().alert('API token\n\n' + t +
+      '\n\nPaste this into the app Setup screen together with your /exec URL.' +
+      '\n\nIt is also in the execution log at the bottom of the editor.');
+  } catch (err) { /* no UI when run headless — the log still has it */ }
+  return t;
+}
+
+function resetToken() {
+  var t = Utilities.getUuid().replace(/-/g, '');
+  PropertiesService.getScriptProperties().setProperty('API_TOKEN', t);
+  return showToken();
+}
+
+/* ------------------------------------------------------------------ *
  * Finding the Sheet
  *
  * Normally this script is bound to the Sheet (created via Extensions >
@@ -80,64 +152,6 @@ function useSheet(id) {
   PropertiesService.getScriptProperties().setProperty('SHEET_ID', id);
   Logger.log('SHEET_ID set to ' + id + ' ("' + name + '"). Now run setup().');
   return name;
-}
-
-/* ------------------------------------------------------------------ *
- * One-time setup
- * ------------------------------------------------------------------ */
-
-function setup() {
-  var ss = book();
-
-  Object.keys(HEADERS).forEach(function (name) {
-    var sh = ss.getSheetByName(name);
-    if (!sh) sh = ss.insertSheet(name);
-    var hdr = HEADERS[name];
-    sh.getRange(1, 1, 1, hdr.length).setValues([hdr]).setFontWeight('bold');
-    sh.setFrozenRows(1);
-  });
-
-  // Remove the default empty "Sheet1" if it is still pristine.
-  var def = ss.getSheetByName('Sheet1');
-  if (def && ss.getSheets().length > 1 && def.getLastRow() === 0) ss.deleteSheet(def);
-
-  // Seed people only if empty.
-  var people = ss.getSheetByName(SHEET_PEOPLE);
-  if (people.getLastRow() < 2) {
-    people.getRange(2, 1, 3, 1).setValues([['Victor'], ['Person 2'], ['Person 3']]);
-  }
-
-  // Seed rate rows only if empty.
-  var rates = ss.getSheetByName(SHEET_RATES);
-  if (rates.getLastRow() < 2) {
-    rates.getRange(2, 1, CURRENCIES.length, 4).setValues(CURRENCIES.map(function (c) {
-      return [c, c === 'AUD' ? 1 : '', '', false];
-    }));
-  }
-
-  // Generate an API token if there isn't one.
-  var props = PropertiesService.getScriptProperties();
-  if (!props.getProperty('API_TOKEN')) {
-    props.setProperty('API_TOKEN', Utilities.getUuid().replace(/-/g, ''));
-  }
-
-  showToken();
-}
-
-function showToken() {
-  var t = PropertiesService.getScriptProperties().getProperty('API_TOKEN');
-  Logger.log('API TOKEN: ' + t);
-  try {
-    SpreadsheetApp.getUi().alert('API token\n\n' + t +
-      '\n\nPaste this into the app Setup screen together with your /exec URL.');
-  } catch (err) { /* no UI when run headless — the log still has it */ }
-  return t;
-}
-
-function resetToken() {
-  var t = Utilities.getUuid().replace(/-/g, '');
-  PropertiesService.getScriptProperties().setProperty('API_TOKEN', t);
-  return showToken();
 }
 
 /* ------------------------------------------------------------------ *
