@@ -1,7 +1,9 @@
-# Trip Split — Greater China 2026
+# Trip Split
 
-A mobile-first bill splitter for three people, built for the 16 Oct – 1 Nov 2026 trip
-(Hong Kong · Macau · Guangzhou · Chongqing · Chengdu, home base Sydney).
+A mobile-first bill splitter. It started as one trip — 16 Oct – 1 Nov 2026 across
+Hong Kong, Macau, Guangzhou, Chongqing and Chengdu — and now runs several
+**projects** side by side: a trip with dates, and everyday AUD spending that
+carries on around it.
 
 Single-page vanilla HTML/CSS/JS, no build tooling. The frontend is served from
 GitHub Pages; all data lives in a Google Sheet behind an Apps Script Web App.
@@ -81,10 +83,11 @@ The tabs it creates:
 
 | Tab | Columns |
 |---|---|
+| `Projects` | id, name, start_date, end_date, currencies, cities, members, archived |
 | `People` | name |
-| `Expenses` | id, date, city, description, paid_by, currency, amount_local, amount_aud, split_type, split_detail_json, item_breakdown_json |
+| `Expenses` | id, date, city, description, paid_by, currency, amount_local, amount_aud, split_type, split_detail_json, item_breakdown_json, project_id |
 | `ExchangeRates` | currency, rate_to_aud, last_updated, is_manual_override |
-| `Settlements` | id, from, to, amount_aud, date, note |
+| `Settlements` | id, from, to, amount_aud, date, note, project_id |
 
 ## 2. Deploy it as a Web App
 
@@ -330,6 +333,57 @@ Since a roster change is shared, do it on one phone and let the others pull it
 in. Two people renaming the same person at once is last-write-wins, like any
 other edit.
 
+## 8. Projects
+
+A project is a set of expenses kept apart from the others, like a Splitwise
+group. Balances, settle-up and history are always computed **within** one — trip
+money and grocery money never mix.
+
+Two exist out of the box:
+
+| | Dates | Currencies | Places |
+|---|---|---|---|
+| **Greater China 2026** | 16 Oct – 1 Nov 2026 | AUD, HKD, MOP, CNY | the five cities + Sydney |
+| **General** | ongoing | AUD | none |
+
+Tap the title on the home screen to switch, edit, or add one.
+
+### Dates do the switching for you
+
+Give a project a date range and the app follows the calendar: while today falls
+inside it, that project opens by default; outside it, you land back on the
+ongoing one. So the trip picks itself up when you fly out and hands back to
+everyday spending when you get home, with no switching to remember. You can
+always override by hand.
+
+Only one dated project can own a given day, so the editor warns you if the dates
+you're setting overlap an existing project.
+
+### What a project carries
+
+- **Dates**, or ongoing.
+- **Currencies.** A project with only AUD hides the conversion line and the rate
+  tag entirely, which makes everyday entry two taps shorter.
+- **Places.** Optional. With none, the place picker disappears and the history
+  filter goes with it; with several you get the city chips. The receipt reader is
+  told which places and currencies are valid for the project it's filling in.
+- **Members.** Everyone by default; tap someone out to leave them off. Useful
+  when the trip is three people but the flatshare is two.
+
+Deleting a project deletes its expenses and settlements with it, and says so
+first. Keeping at least one project is enforced.
+
+### Upgrading an existing Sheet
+
+`setup()` handles it and is safe to re-run. It adds the `Projects` tab, appends
+`project_id` to `Expenses` and `Settlements` (appends, so nothing already in the
+Sheet moves), widens a sheet that was trimmed to exactly its old column count,
+seeds the two projects, and files every existing row into a project by its date —
+rows inside a project's range go to it, everything else to the ongoing one.
+
+**This one needs a redeploy** (Deploy → Manage deployments → pencil → New
+version), because the backend changed.
+
 ---
 
 ## Exchange rates
@@ -416,6 +470,8 @@ Apps Script cannot answer a preflight) shaped as
 | `setRate` | `{ currency, rate_to_aud }` | all rates |
 | `clearOverride` | `{ currency }` | all rates |
 | `refreshRates` | — | all rates |
+| `addProject` / `updateProject` | project object | the saved project |
+| `deleteProject` | `{ id }` | the id — also deletes its expenses and settlements |
 | `addSettlement` | settlement object | the settlement |
 | `deleteSettlement` | `{ id }` | the id |
 | `aiStatus` | — | `{ ai: true/false, provider: 'gemini'\|'claude'\|'' }` |

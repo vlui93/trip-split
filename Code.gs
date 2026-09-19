@@ -16,17 +16,21 @@ var SHEET_PEOPLE      = 'People';
 var SHEET_EXPENSES    = 'Expenses';
 var SHEET_RATES       = 'ExchangeRates';
 var SHEET_SETTLEMENTS = 'Settlements';
+var SHEET_PROJECTS    = 'Projects';
 
 var CURRENCIES = ['AUD', 'HKD', 'MOP', 'CNY'];
 var CITY_NAMES = ['Hong Kong', 'Macau', 'Guangzhou', 'Chongqing', 'Chengdu', 'Sydney'];
 
 var HEADERS = {};
 HEADERS[SHEET_PEOPLE]      = ['name'];
+// project_id is appended, not inserted, so an existing sheet keeps its data.
 HEADERS[SHEET_EXPENSES]    = ['id', 'date', 'city', 'description', 'paid_by', 'currency',
                               'amount_local', 'amount_aud', 'split_type',
-                              'split_detail_json', 'item_breakdown_json'];
+                              'split_detail_json', 'item_breakdown_json', 'project_id'];
 HEADERS[SHEET_RATES]       = ['currency', 'rate_to_aud', 'last_updated', 'is_manual_override'];
-HEADERS[SHEET_SETTLEMENTS] = ['id', 'from', 'to', 'amount_aud', 'date', 'note'];
+HEADERS[SHEET_SETTLEMENTS] = ['id', 'from', 'to', 'amount_aud', 'date', 'note', 'project_id'];
+HEADERS[SHEET_PROJECTS]    = ['id', 'name', 'start_date', 'end_date',
+                              'currencies', 'cities', 'members', 'archived'];
 
 /* ------------------------------------------------------------------ *
  * One-time setup
@@ -39,6 +43,10 @@ function setup() {
     var sh = ss.getSheetByName(name);
     if (!sh) sh = ss.insertSheet(name);
     var hdr = HEADERS[name];
+    // A sheet trimmed to exactly its old column count has nowhere to put
+    // project_id, and every later getRange would throw. Widen it first.
+    var need = hdr.length - sh.getMaxColumns();
+    if (need > 0) sh.insertColumnsAfter(sh.getMaxColumns(), need);
     sh.getRange(1, 1, 1, hdr.length).setValues([hdr]).setFontWeight('bold');
     sh.setFrozenRows(1);
   });
@@ -61,6 +69,18 @@ function setup() {
     }));
   }
 
+  // Seed the two starting projects only if there are none.
+  var projects = ss.getSheetByName(SHEET_PROJECTS);
+  if (projects.getLastRow() < 2) {
+    projects.getRange(2, 1, 2, 8).setValues([
+      ['p_trip', 'Greater China 2026', '2026-10-16', '2026-11-01',
+       'AUD,HKD,MOP,CNY', CITY_NAMES.join(','), '', false],
+      ['p_general', 'General', '', '', 'AUD', '', '', false]
+    ]);
+  }
+
+  migrateProjectIds();
+
   // Generate an API token if there isn't one.
   var props = PropertiesService.getScriptProperties();
   if (!props.getProperty('API_TOKEN')) {
@@ -72,6 +92,7 @@ function setup() {
   // The execution log is the one place output always lands, whether or not the
   // Sheet's UI is available to show a dialog.
   Logger.log('setup() finished on "' + ss.getName() + '"');
+  Logger.log('Projects: ' + getProjects().map(function (p) { return p.name; }).join(', '));
   Logger.log('Tabs ready: ' + Object.keys(HEADERS).join(', '));
   Logger.log('People: ' + getPeople().join(', '));
   Logger.log('');
@@ -214,6 +235,9 @@ function handle(e, req) {
       case 'setRate':      out = { rates: setRate(payload.currency, payload.rate_to_aud) }; break;
       case 'clearOverride':out = { rates: clearOverride(payload.currency) }; break;
       case 'refreshRates': out = { rates: refreshRates(true) }; break;
+      case 'addProject':   out = { project: addProject(payload) }; break;
+      case 'updateProject':out = { project: updateProject(payload) }; break;
+      case 'deleteProject':out = { id: deleteProject(payload.id) }; break;
       case 'addSettlement':out = { settlement: addSettlement(payload) }; break;
       case 'deleteSettlement': out = { id: deleteSettlement(payload.id) }; break;
       default: return json({ ok: false, error: 'Unknown action: ' + action });
@@ -279,6 +303,7 @@ function ymd(d) {
 
 function bootstrap(forceRates) {
   return {
+    projects:    getProjects(),
     people:      getPeople(),
     expenses:    getExpenses(),
     rates:       refreshRates(!!forceRates),
@@ -306,7 +331,8 @@ function getExpenses() {
       amount_aud:   Number(r.amount_aud) || 0,
       split_type:   String(r.split_type || 'equal'),
       split_detail: parseJson(r.split_detail_json, {}),
-      items:        parseJson(r.item_breakdown_json, null)
+      items:        parseJson(r.item_breakdown_json, null),
+      project_id:   String(r.project_id || '')
     };
   });
 }
@@ -319,7 +345,8 @@ function getSettlements() {
       to:         String(r.to),
       amount_aud: Number(r.amount_aud) || 0,
       date:       r.date instanceof Date ? ymd(r.date) : String(r.date),
-      note:       String(r.note || '')
+      note:       String(r.note || ''),
+      project_id: String(r.project_id || '')
     };
   });
 }
@@ -327,6 +354,130 @@ function getSettlements() {
 function parseJson(s, fallback) {
   if (s === '' || s === null || s === undefined) return fallback;
   try { return JSON.parse(String(s)); } catch (e) { return fallback; }
+}
+
+/* ------------------------------------------------------------------ *
+ * Projects
+ *
+ * A project is a group of expenses kept apart from the others: a trip with a
+ * date range, or an open-ended everyday one. Balances and settle-up are always
+ * computed within a project, never across them.
+ * ------------------------------------------------------------------ */
+
+function csv(v) {
+  return String(v == null ? '' : v).split(',')
+    .map(function (x) { return x.trim(); })
+    .filter(function (x) { return x; });
+}
+
+function getProjects() {
+  return readRows(SHEET_PROJECTS).map(function (r) {
+    return {
+      id:         String(r.id),
+      name:       String(r.name),
+      start_date: r.start_date instanceof Date ? ymd(r.start_date) : String(r.start_date || ''),
+      end_date:   r.end_date   instanceof Date ? ymd(r.end_date)   : String(r.end_date   || ''),
+      currencies: csv(r.currencies).length ? csv(r.currencies) : ['AUD'],
+      cities:     csv(r.cities),
+      members:    csv(r.members),
+      archived:   r.archived === true || String(r.archived).toLowerCase() === 'true'
+    };
+  }).filter(function (p) { return p.id; });
+}
+
+function projectRow(p) {
+  return [
+    String(p.id || ('pr' + Date.now() + Math.floor(Math.random() * 1000))),
+    String(p.name || 'Untitled'),
+    String(p.start_date || ''),
+    String(p.end_date || ''),
+    (p.currencies && p.currencies.length ? p.currencies : ['AUD']).join(','),
+    (p.cities || []).join(','),
+    (p.members || []).join(','),
+    !!p.archived
+  ];
+}
+
+function addProject(p) {
+  var row = projectRow(p);
+  sheet(SHEET_PROJECTS).appendRow(row);
+  return getProjects().filter(function (x) { return x.id === row[0]; })[0];
+}
+
+function updateProject(p) {
+  if (!p.id) throw new Error('updateProject needs an id');
+  var r = findRowById(SHEET_PROJECTS, p.id);
+  if (r < 0) throw new Error('Project not found: ' + p.id);
+  var row = projectRow(p);
+  sheet(SHEET_PROJECTS).getRange(r, 1, 1, row.length).setValues([row]);
+  return getProjects().filter(function (x) { return x.id === p.id; })[0];
+}
+
+/** Deleting a project takes its expenses and settlements with it. */
+function deleteProject(id) {
+  var all = getProjects();
+  if (all.length < 2) throw new Error('Keep at least one project.');
+  var r = findRowById(SHEET_PROJECTS, id);
+  if (r < 0) throw new Error('Project not found: ' + id);
+
+  [SHEET_EXPENSES, SHEET_SETTLEMENTS].forEach(function (name) {
+    var sh = sheet(name);
+    var last = sh.getLastRow();
+    if (last < 2) return;
+    var col = HEADERS[name].indexOf('project_id') + 1;
+    var vals = sh.getRange(2, col, last - 1, 1).getValues();
+    for (var i = vals.length - 1; i >= 0; i--) {         // bottom-up so indices hold
+      if (String(vals[i][0]) === String(id)) sh.deleteRow(i + 2);
+    }
+  });
+
+  sheet(SHEET_PROJECTS).deleteRow(r);
+  return id;
+}
+
+/**
+ * Give every row without a project_id one, choosing by date where a project
+ * has a range and falling back to the first project otherwise. Safe to re-run.
+ */
+function migrateProjectIds() {
+  var projects = getProjects();
+  if (!projects.length) return 0;
+
+  var dated = projects.filter(function (p) { return p.start_date && p.end_date; });
+  var fallback = projects.filter(function (p) { return !p.start_date && !p.end_date; })[0] || projects[0];
+
+  function pick(dateStr) {
+    for (var i = 0; i < dated.length; i++) {
+      if (dateStr >= dated[i].start_date && dateStr <= dated[i].end_date) return dated[i].id;
+    }
+    return fallback.id;
+  }
+
+  var moved = 0;
+  [SHEET_EXPENSES, SHEET_SETTLEMENTS].forEach(function (name) {
+    var sh = sheet(name);
+    var last = sh.getLastRow();
+    if (last < 2) return;
+    var hdr = HEADERS[name];
+    var pCol = hdr.indexOf('project_id') + 1;
+    var dCol = hdr.indexOf('date') + 1;
+
+    var pids  = sh.getRange(2, pCol, last - 1, 1).getValues();
+    var dates = sh.getRange(2, dCol, last - 1, 1).getValues();
+    var out = [], changed = false;
+
+    for (var i = 0; i < pids.length; i++) {
+      if (String(pids[i][0] || '').trim()) { out.push([pids[i][0]]); continue; }
+      var d = dates[i][0];
+      d = (d instanceof Date) ? ymd(d) : String(d || '');
+      out.push([pick(d)]);
+      changed = true; moved++;
+    }
+    if (changed) sh.getRange(2, pCol, out.length, 1).setValues(out);
+  });
+
+  if (moved) Logger.log('Assigned ' + moved + ' existing row(s) to a project.');
+  return moved;
 }
 
 /* ------------------------------------------------------------------ *
@@ -360,7 +511,8 @@ function expenseRow(p) {
     Number(p.amount_aud) || 0,
     String(p.split_type || 'equal'),
     JSON.stringify(p.split_detail || {}),
-    p.items ? JSON.stringify(p.items) : ''
+    p.items ? JSON.stringify(p.items) : '',
+    String(p.project_id || '')
   ];
 }
 
@@ -373,7 +525,8 @@ function rowToExpense(row) {
     amount_local: Number(o.amount_local), amount_aud: Number(o.amount_aud),
     split_type: o.split_type,
     split_detail: parseJson(o.split_detail_json, {}),
-    items: parseJson(o.item_breakdown_json, null)
+    items: parseJson(o.item_breakdown_json, null),
+    project_id: String(o.project_id || '')
   };
 }
 
@@ -410,10 +563,12 @@ function addSettlement(p) {
     String(p.to || ''),
     Number(p.amount_aud) || 0,
     String(p.date || ymd(new Date())),
-    String(p.note || '')
+    String(p.note || ''),
+    String(p.project_id || '')
   ];
   sheet(SHEET_SETTLEMENTS).appendRow(row);
-  return { id: row[0], from: row[1], to: row[2], amount_aud: row[3], date: row[4], note: row[5] };
+  return { id: row[0], from: row[1], to: row[2], amount_aud: row[3],
+           date: row[4], note: row[5], project_id: row[6] };
 }
 
 function deleteSettlement(id) {
@@ -686,7 +841,9 @@ function testAi() {
 }
 
 /** The shape every parse returns. All fields required so the schema stays strict. */
-function draftSchema(people) {
+function draftSchema(people, cities, currencies) {
+  cities     = (cities && cities.length) ? cities : CITY_NAMES;
+  currencies = (currencies && currencies.length) ? currencies : CURRENCIES;
   return {
     type: 'object',
     additionalProperties: false,
@@ -695,8 +852,8 @@ function draftSchema(people) {
     properties: {
       description:  { type: 'string', description: 'Short label, e.g. "Hotpot dinner". Never blank.' },
       date:         { type: 'string', description: 'YYYY-MM-DD. Use the date on the receipt if legible, otherwise today.' },
-      city:         { type: 'string', enum: CITY_NAMES, description: 'Which trip city this was in. Keep the one given in the prompt unless the receipt or description clearly says otherwise.' },
-      currency:     { type: 'string', enum: CURRENCIES },
+      city:         { type: 'string', enum: cities, description: 'Which trip city this was in. Keep the one given in the prompt unless the receipt or description clearly says otherwise.' },
+      currency:     { type: 'string', enum: currencies },
       amount_local: { type: 'number', description: 'Grand total in the local currency. Never converted to AUD.' },
       paid_by:      { type: 'string', enum: people, description: 'Who paid. If unstated, the default payer given in the prompt.' },
       split_type:   { type: 'string', enum: ['equal', 'exact', 'percent', 'itemized'] },
@@ -735,14 +892,15 @@ function draftSchema(people) {
   };
 }
 
-function draftSystemPrompt(people, city, currency, defaultPayer, todayStr) {
+function draftSystemPrompt(people, city, currency, defaultPayer, todayStr, cities, currencies) {
   return [
     'You turn receipts and plain-English descriptions into a single expense for a',
     'three-person trip splitter. The trip runs 16 Oct - 1 Nov 2026 across Hong Kong,',
     'Macau, Guangzhou, Chongqing and Chengdu, with Sydney as home base.',
     '',
     'The three people are: ' + people.join(', ') + '. Use these names exactly.',
-    'Supported currencies: ' + CURRENCIES.join(', ') + '.',
+    'Currencies allowed here: ' + currencies.join(', ') + '.',
+    (cities.length ? 'Places allowed here: ' + cities.join(', ') + '.' : ''),
     'City currencies: Hong Kong=HKD, Macau=MOP, Guangzhou/Chongqing/Chengdu=CNY, Sydney=AUD.',
     '',
     'Context for this expense:',
@@ -772,16 +930,18 @@ function draftSystemPrompt(people, city, currency, defaultPayer, todayStr) {
  * so an unfamiliar beta flag can never take the feature down.
  */
 /** Provider-agnostic entry point. Both paths return the same normalised draft. */
-function aiDraft(parts, people, city, currency, defaultPayer) {
+function aiDraft(parts, people, city, currency, defaultPayer, cities, currencies) {
+  cities     = (cities && cities.length) ? cities : CITY_NAMES;
+  currencies = (currencies && currencies.length) ? currencies : CURRENCIES;
   var who = aiProvider();
   if (!who) {
     throw new Error('AI features are off. Run setGeminiKey("AIza...") for the free option, ' +
                     'or setApiKey("sk-ant-...") for Claude.');
   }
-  var system = draftSystemPrompt(people, city, currency, defaultPayer, ymd(new Date()));
+  var system = draftSystemPrompt(people, city, currency, defaultPayer, ymd(new Date()), cities, currencies);
   var raw = (who === 'gemini')
-    ? geminiCall(system, parts, people)
-    : claudeCall(system, parts, people);
+    ? geminiCall(system, parts, people, cities, currencies)
+    : claudeCall(system, parts, people, cities, currencies);
 
   var draft;
   try {
@@ -789,7 +949,7 @@ function aiDraft(parts, people, city, currency, defaultPayer) {
   } catch (err) {
     throw new Error('Could not read the model\u2019s reply as JSON. Try again, or enter it by hand.');
   }
-  return normaliseDraft(draft, people, currency, city);
+  return normaliseDraft(draft, people, currency, city, cities, currencies);
 }
 
 /**
@@ -804,7 +964,7 @@ function claudeContent(parts) {
   });
 }
 
-function claudeCall(system, parts, people) {
+function claudeCall(system, parts, people, cities, currencies) {
   var key = PropertiesService.getScriptProperties().getProperty('ANTHROPIC_API_KEY');
   var userContent = claudeContent(parts);
   var body = {
@@ -816,7 +976,7 @@ function claudeCall(system, parts, people) {
       // Low effort keeps the round trip inside Apps Script's fetch timeout;
       // this is extraction, not reasoning-heavy work.
       effort: 'low',
-      format: { type: 'json_schema', schema: draftSchema(people) }
+      format: { type: 'json_schema', schema: draftSchema(people, cities, currencies) }
     },
     fallbacks: 'default'
   };
@@ -1013,7 +1173,7 @@ function geminiFetch(key, model, body) {
     });
 }
 
-function geminiCall(system, parts, people) {
+function geminiCall(system, parts, people, cities, currencies) {
   var props = PropertiesService.getScriptProperties();
   var key = props.getProperty('GEMINI_API_KEY');
 
@@ -1023,7 +1183,7 @@ function geminiCall(system, parts, people) {
     generationConfig: {
       temperature: 0,
       responseMimeType: 'application/json',
-      responseSchema: toGeminiSchema(draftSchema(people))
+      responseSchema: toGeminiSchema(draftSchema(people, cities, currencies))
     }
   };
 
@@ -1095,15 +1255,17 @@ function geminiCall(system, parts, people) {
 }
 
 /** Trust nothing from the model: clamp names, currency and numbers to what the app allows. */
-function normaliseDraft(d, people, fallbackCurrency, fallbackCity) {
+function normaliseDraft(d, people, fallbackCurrency, fallbackCity, cities, currencies) {
+  cities     = (cities && cities.length) ? cities : CITY_NAMES;
+  currencies = (currencies && currencies.length) ? currencies : CURRENCIES;
   function person(n) { return people.indexOf(String(n)) >= 0 ? String(n) : null; }
   function num(v) { var x = Number(v); return isFinite(x) && x > 0 ? Math.round(x * 100) / 100 : 0; }
 
   var cur = String(d.currency || '').toUpperCase();
-  if (CURRENCIES.indexOf(cur) < 0) cur = fallbackCurrency || 'AUD';
+  if (currencies.indexOf(cur) < 0) cur = fallbackCurrency || currencies[0] || 'AUD';
 
   var city = String(d.city || '');
-  if (CITY_NAMES.indexOf(city) < 0) city = fallbackCity || '';
+  if (cities.indexOf(city) < 0) city = fallbackCity || '';
 
   var type = ['equal', 'exact', 'percent', 'itemized'].indexOf(String(d.split_type)) >= 0
     ? String(d.split_type) : 'equal';
@@ -1162,7 +1324,7 @@ function parseReceipt(p) {
     { image: b64, mediaType: media },
     { text: receiptPrompt(p) }
   ];
-  return aiDraft(parts, people, p.city, p.currency, p.defaultPayer || people[0]);
+  return aiDraft(parts, people, p.city, p.currency, p.defaultPayer || people[0], p.cities, p.currencies);
 }
 
 function receiptPrompt(p) {
@@ -1184,5 +1346,5 @@ function parseText(p) {
   var parts = [{
     text: 'Turn this description into one expense:\n\n"' + text.slice(0, 2000) + '"'
   }];
-  return aiDraft(parts, people, p.city, p.currency, p.defaultPayer || people[0]);
+  return aiDraft(parts, people, p.city, p.currency, p.defaultPayer || people[0], p.cities, p.currencies);
 }

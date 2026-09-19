@@ -252,10 +252,10 @@ select{background-image:linear-gradient(45deg,transparent 50%,var(--muted) 50%),
 <!-- ============ HOME ============ -->
 <section id="s-home" class="screen">
   <div class="topbar">
-    <div class="grow">
-      <h1>Trip Split</h1>
-      <div style="font-size:12.5px;color:var(--muted);margin-top:1px">16 Oct – 1 Nov 2026 · Greater China</div>
-    </div>
+    <button class="grow" id="projBtn" style="text-align:left;padding:0">
+      <h1 id="projName">Trip Split<span style="font-size:15px;opacity:.5;margin-left:6px">⌄</span></h1>
+      <div id="projMeta" style="font-size:12.5px;color:var(--muted);margin-top:1px"></div>
+    </button>
     <button class="iconbtn" id="syncBtn" title="Sync"><span id="syncIcon">⟳</span></button>
   </div>
 
@@ -493,6 +493,61 @@ select{background-image:linear-gradient(45deg,transparent 50%,var(--muted) 50%),
   </div>
 </div>
 
+<!-- ============ PROJECT SWITCHER ============ -->
+<div class="sheet" id="projSheet">
+  <div class="scrim" data-close="projSheet"></div>
+  <div class="panel">
+    <div class="grab"></div>
+    <div class="sheet-head"><h2>Projects</h2><button class="btn sm ghost" data-close="projSheet">Close</button></div>
+    <div class="card" id="projList"></div>
+    <button class="btn ghost full sm" id="newProj">+ New project</button>
+    <p class="sub">A project keeps its own expenses, balances and settle-up. Give one a date range
+      and the app switches to it by itself while you're away.</p>
+  </div>
+</div>
+
+<!-- ============ PROJECT EDITOR ============ -->
+<div class="sheet" id="projEdit">
+  <div class="scrim" data-close="projEdit"></div>
+  <div class="panel">
+    <div class="grab"></div>
+    <div class="sheet-head"><h2 id="peTitle">New project</h2><button class="btn sm ghost" data-close="projEdit">Cancel</button></div>
+    <div class="card stack">
+      <div>
+        <label class="fl" for="peName">Name</label>
+        <input id="peName" type="text" placeholder="Japan 2027, Housemates, Weekend away">
+      </div>
+      <div>
+        <label class="fl">Kind</label>
+        <div class="seg" id="peKind" style="grid-template-columns:repeat(2,1fr)">
+          <button data-kind="dated">Has dates</button>
+          <button data-kind="open">Ongoing</button>
+        </div>
+      </div>
+      <div id="peDates">
+        <div class="row">
+          <div class="grow"><label class="fl" for="peStart">From</label><input id="peStart" type="date"></div>
+          <div class="grow"><label class="fl" for="peEnd">To</label><input id="peEnd" type="date"></div>
+        </div>
+      </div>
+      <div>
+        <label class="fl">Currencies</label>
+        <div class="chips" id="peCur"></div>
+      </div>
+      <div>
+        <label class="fl" for="pePlaces">Places <span style="text-transform:none;font-weight:500">(optional, comma separated)</span></label>
+        <input id="pePlaces" type="text" placeholder="Hong Kong, Macau, Chengdu">
+      </div>
+      <div>
+        <label class="fl">Who's in it</label>
+        <div class="chips" id="peMembers"></div>
+      </div>
+      <button class="btn primary full" id="peSave">Save project</button>
+      <button class="btn danger full sm" id="peDelete" style="display:none">Delete project and everything in it</button>
+    </div>
+  </div>
+</div>
+
 <div class="ptr" id="ptr"><div class="ring"></div></div>
 <div class="toast" id="toast"></div>
 <script>
@@ -516,9 +571,9 @@ const CURS = ['AUD','HKD','MOP','CNY'];
 const K_CFG='tsplit.cfg', K_STATE='tsplit.state', K_QUEUE='tsplit.queue', K_PREFS='tsplit.prefs';
 
 let CFG   = load(K_CFG,   null);
-let S     = load(K_STATE, { people:[], expenses:[], rates:[], settlements:[] });
+let S     = load(K_STATE, { projects:[], people:[], expenses:[], rates:[], settlements:[] });
 let QUEUE = load(K_QUEUE, []);
-let PREFS = load(K_PREFS, { lastCity:'Hong Kong', me:'' });
+let PREFS = load(K_PREFS, { lastCity:'', me:'', pid:'' });
 let syncing = false, lastSyncErr = '';
 
 function load(k, d){ try{ const v=localStorage.getItem(k); return v?JSON.parse(v):d; }catch(e){ return d; } }
@@ -526,6 +581,86 @@ function save(k, v){ try{ localStorage.setItem(k, JSON.stringify(v)); }catch(e){
 const $  = s => document.querySelector(s);
 const $$ = s => Array.from(document.querySelectorAll(s));
 const esc = s => String(s==null?'':s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+
+/* ============================================================
+   Projects
+
+   Every expense belongs to one. Balances, settle-up and history are always
+   scoped to the active one — trip money and everyday money never mix.
+   ============================================================ */
+
+function projects(){ return (S.projects || []).filter(p => !p.archived); }
+function projectById(id){ return (S.projects || []).find(p => p.id === id) || null; }
+
+/** The project whose date range covers a day, if any. */
+function projectForDate(d){
+  return projects().find(p => p.start_date && p.end_date && d >= p.start_date && d <= p.end_date) || null;
+}
+function openEndedProject(){
+  return projects().find(p => !p.start_date && !p.end_date) || null;
+}
+
+function activeProject(){
+  return projectById(PREFS.pid) || projects()[0] || null;
+}
+function setActiveProject(id){
+  PREFS.pid = id; save(K_PREFS, PREFS);
+  const p = projectById(id);
+  if (p) PREFS.lastCity = (p.cities && p.cities[0]) || '';
+  save(K_PREFS, PREFS);
+  renderAll();
+}
+
+/**
+ * On open, follow the calendar: if today falls inside a project's dates use
+ * that one, otherwise fall back to the open-ended project. That is the whole
+ * point of giving a trip a date range — it picks itself up when you land and
+ * hands back to everyday spending when you get home.
+ */
+function autoPickProject(){
+  if (!projects().length) return;
+  const dated = projectForDate(today());
+  if (dated){ if (PREFS.pid !== dated.id) setActiveProject(dated.id); return; }
+  const cur = activeProject();
+  if (cur && cur.start_date && cur.end_date && !projectForDate(today())){
+    const gen = openEndedProject();
+    if (gen) setActiveProject(gen.id);
+    return;
+  }
+  if (!activeProject()) setActiveProject(projects()[0].id);
+}
+
+/** Only the rows belonging to the active project. */
+function pExpenses(){
+  const p = activeProject();
+  if (!p) return [];
+  return (S.expenses || []).filter(e => (e.project_id || '') === p.id);
+}
+function pSettlements(){
+  const p = activeProject();
+  if (!p) return [];
+  return (S.settlements || []).filter(x => (x.project_id || '') === p.id);
+}
+/** Who is on this project — its own member list, or everyone. */
+function pPeople(){
+  const p = activeProject();
+  if (!p || !p.members || !p.members.length) return S.people;
+  return p.members.filter(n => S.people.includes(n));
+}
+function pCities(){
+  const p = activeProject();
+  return (p && p.cities && p.cities.length) ? p.cities : [];
+}
+function pCurrencies(){
+  const p = activeProject();
+  return (p && p.currencies && p.currencies.length) ? p.currencies : ['AUD'];
+}
+function projectDates(p){
+  if (!p.start_date || !p.end_date) return 'Ongoing';
+  const f = d => { const [y,m,dd] = d.split('-'); 
+    return dd.replace(/^0/,'') + ' ' + ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'][+m-1]; };
+  return f(p.start_date) + ' – ' + f(p.end_date) + ' ' + p.end_date.slice(0,4);
+}
 
 /* ---------------- money ---------------- */
 const cents  = n => Math.round((Number(n)||0)*100);
@@ -583,7 +718,7 @@ function allocate(totalC, weights){
 /** Per-person share of one expense, in AUD cents. Always sums to amount_aud. */
 function sharesOf(ex){
   const totalC = cents(ex.amount_aud);
-  const people = S.people.length ? S.people : [];
+  const people = pPeople().length ? pPeople() : S.people;
   const d = ex.split_detail || {};
   let weights = {};
 
@@ -621,14 +756,14 @@ function sharesOf(ex){
 /** Net balance per person in AUD cents. Positive = owed money. */
 function balances(){
   const b = {};
-  S.people.forEach(n => b[n] = 0);
-  (S.expenses||[]).forEach(ex => {
+  pPeople().forEach(n => b[n] = 0);
+  pExpenses().forEach(ex => {
     if (b[ex.paid_by] === undefined) b[ex.paid_by] = 0;
     b[ex.paid_by] += cents(ex.amount_aud);
     const sh = sharesOf(ex);
     Object.keys(sh).forEach(n => { b[n] = (b[n]||0) - sh[n]; });
   });
-  (S.settlements||[]).forEach(st => {
+  pSettlements().forEach(st => {
     const a = cents(st.amount_aud);
     b[st.from] = (b[st.from]||0) + a;
     b[st.to]   = (b[st.to]  ||0) - a;
@@ -700,9 +835,10 @@ async function sync(force){
       QUEUE.shift(); save(K_QUEUE, QUEUE); renderSync();
     }
     const d = await call('bootstrap', {}, { refreshRates: !!force });
-    S = { people:d.people||[], expenses:d.expenses||[], rates:d.rates||[],
+    S = { projects:d.projects||[], people:d.people||[], expenses:d.expenses||[], rates:d.rates||[],
           settlements:d.settlements||[], serverDate:d.serverDate||'' };
     if (!pedDirty()) PED = null;     // keep an in-progress roster edit
+    autoPickProject();
     persist();
     renderAll();
   } catch(err){
@@ -756,7 +892,7 @@ function renderSync(){
 
 function renderHome(){
   const b = balances();
-  const names = S.people.slice();
+  const names = pPeople().slice();
   Object.keys(b).forEach(n => { if (!names.includes(n) && b[n] !== 0) names.push(n); });
   $('#balances').innerHTML = names.length ? names.map(n => {
     const v = b[n] || 0;
@@ -771,7 +907,7 @@ function renderHome(){
     </div>`;
   }).join('') : `<div class="empty">Add people in Settings.</div>`;
 
-  const total = (S.expenses||[]).reduce((a,e) => a + cents(e.amount_aud), 0);
+  const total = pExpenses().reduce((a,e) => a + cents(e.amount_aud), 0);
   $('#tripTotal').textContent = fmtAudC(total) + ' spent';
 
   const tx = simplify(b);
@@ -781,7 +917,7 @@ function renderHome(){
       ? `${tx[0].from} → ${tx[0].to} · ${fmtAudC(tx[0].c)}`
       : `${tx.length} transfers clear it`;
 
-  const recent = (S.expenses||[]).slice().sort(byDateDesc).slice(0,6);
+  const recent = pExpenses().slice().sort(byDateDesc).slice(0,6);
   $('#recent').innerHTML = recent.length ? recent.map(exRow).join('')
     : `<div class="empty"><span class="big">🧾</span>No expenses yet.<br>Tap <b>+</b> to add the first one.</div>`;
 }
@@ -793,11 +929,12 @@ function byDateDesc(a,b){
 
 function exRow(ex){
   const me = ex.currency !== 'AUD';
+  const meta = [ex.date, ex.city, ex.paid_by + ' paid', splitLabel(ex.split_type)].filter(Boolean).join(' · ');
   return `<button class="ex press" data-ex="${esc(ex.id)}">
-    <div class="ic">${esc(cityIcon(ex.city))}</div>
+    <div class="ic">${esc(cityIcon(ex.city) || dayBadge(ex.date))}</div>
     <div class="grow">
       <div class="t1 ellip">${esc(ex.description || 'Expense')}</div>
-      <div class="t2 ellip">${esc(ex.date)} · ${esc(ex.city||'—')} · ${esc(ex.paid_by)} paid · ${esc(splitLabel(ex.split_type))}</div>
+      <div class="t2 ellip">${esc(meta)}</div>
     </div>
     <div>
       <div class="r1 mono">${me ? fmtCur(ex.amount_local, ex.currency) : fmtAud(ex.amount_aud)}</div>
@@ -806,7 +943,14 @@ function exRow(ex){
   </button>`;
 }
 function cityIcon(c){
-  return ({ 'Hong Kong':'HK','Macau':'MO','Guangzhou':'GZ','Chongqing':'CQ','Chengdu':'CD','Sydney':'SYD' })[c] || '··';
+  if (!c) return '';
+  const known = { 'Hong Kong':'HK','Macau':'MO','Guangzhou':'GZ','Chongqing':'CQ','Chengdu':'CD','Sydney':'SYD' }[c];
+  return known || c.slice(0,2).toUpperCase();
+}
+/** With no place to show, the day of the month reads better than a placeholder. */
+function dayBadge(d){
+  const parts = String(d||'').split('-');
+  return parts.length === 3 ? String(Number(parts[2])) : '·';
 }
 function splitLabel(t){
   return ({ equal:'equal', exact:'exact', percent:'%', itemized:'itemized' })[t] || t;
@@ -817,13 +961,19 @@ function splitLabel(t){
 let HF = { city:'', person:'' };
 
 function renderHistory(){
-  const cities = Array.from(new Set((S.expenses||[]).map(e => e.city).filter(Boolean)));
-  $('#fCity').innerHTML = [['','All cities']].concat(cities.map(c => [c,c]))
-    .map(([v,l]) => `<button class="chip ${HF.city===v?'on':''}" data-fc="${esc(v)}">${esc(l)}</button>`).join('');
-  $('#fPerson').innerHTML = [['','Everyone']].concat(S.people.map(p => [p,p]))
+  const cities = Array.from(new Set(pExpenses().map(e => e.city).filter(Boolean)));
+  const cityWrap = $('#fCity').previousElementSibling;   // its section label
+  if (cities.length > 1){
+    $('#fCity').style.display = ''; if (cityWrap) cityWrap.style.display = '';
+    $('#fCity').innerHTML = [['','All places']].concat(cities.map(c => [c,c]))
+      .map(([v,l]) => `<button class="chip ${HF.city===v?'on':''}" data-fc="${esc(v)}">${esc(l)}</button>`).join('');
+  } else {
+    HF.city = ''; $('#fCity').style.display = 'none'; if (cityWrap) cityWrap.style.display = 'none';
+  }
+  $('#fPerson').innerHTML = [['','Everyone']].concat(pPeople().map(p => [p,p]))
     .map(([v,l]) => `<button class="chip ${HF.person===v?'on':''}" data-fp="${esc(v)}">${esc(l)}</button>`).join('');
 
-  const list = (S.expenses||[]).filter(ex => {
+  const list = pExpenses().filter(ex => {
     if (HF.city && ex.city !== HF.city) return false;
     if (HF.person){
       if (ex.paid_by === HF.person) return true;
@@ -856,7 +1006,7 @@ function renderSettle(){
     : `<div class="empty"><span class="big">✨</span>All square — no transfers needed.</div>`;
   window.__tx = tx;
 
-  const log = (S.settlements||[]).slice().sort(byDateDesc);
+  const log = pSettlements().slice().sort(byDateDesc);
   $('#settleLog').innerHTML = log.length ? log.map(st => `
     <div class="xfer">
       <div class="ic" style="width:40px;height:40px;border-radius:11px;background:var(--surface-2);display:grid;place-items:center">✓</div>
@@ -1027,7 +1177,7 @@ function renderMore(){
   }
 }
 
-function renderAll(){ renderHome(); renderSync();
+function renderAll(){ renderProjectHeader(); renderHome(); renderSync();
   if ($('#s-history').classList.contains('on')) renderHistory();
   if ($('#s-settle').classList.contains('on'))  renderSettle();
   if ($('#s-more').classList.contains('on'))    renderMore();
@@ -1040,17 +1190,23 @@ function renderAll(){ renderHome(); renderSync();
 let F = null;
 
 function newForm(){
-  const city = PREFS.lastCity || 'Hong Kong';
+  const cities = pCities();
+  const city = (PREFS.lastCity && cities.includes(PREFS.lastCity)) ? PREFS.lastCity : (cities[0] || '');
   return {
     id:null, date:today(), city, cur:curOf(city), amount:'', desc:'',
     // On a shared trip you are nearly always entering something you paid for.
-    paid_by: (PREFS.me && S.people.includes(PREFS.me)) ? PREFS.me : (S.people[0] || ''),
+    paid_by: (PREFS.me && pPeople().includes(PREFS.me)) ? PREFS.me : (pPeople()[0] || ''),
     split_type:'equal',
-    participants: S.people.slice(), exact:{}, percent:{},
-    items:[{ name:'', amount:'', people:S.people.slice() }], extra:''
+    participants: pPeople().slice(), exact:{}, percent:{},
+    items:[{ name:'', amount:'', people:pPeople().slice() }], extra:''
   };
 }
-const curOf = city => (CITIES.find(c => c.name === city) || { cur:'AUD' }).cur;
+function curOf(city){
+  const known = CITIES.find(c => c.name === city);
+  const allowed = pCurrencies();
+  if (known && allowed.includes(known.cur)) return known.cur;
+  return allowed[0] || 'AUD';
+}
 
 function openAdd(){
   if (!S.people.length){ toast('Add people in Settings first'); go('more'); return; }
@@ -1097,9 +1253,19 @@ function formAmount(){
 }
 
 function renderForm(){
-  $('#exCity').innerHTML = CITIES.map(c =>
-    `<button class="chip ${F.city===c.name?'on':''}" data-city="${esc(c.name)}">${esc(c.name)}<small>${c.cur}</small></button>`).join('');
-  $('#exPaid').innerHTML = S.people.map(p =>
+  const cityList = pCities();
+  const cityWrap = $('#exCity').closest('div');
+  if (cityList.length > 1){
+    if (cityWrap) cityWrap.style.display = '';
+    $('#exCity').innerHTML = cityList.map(n => {
+      const c = CITIES.find(x => x.name === n);
+      const cur = (c && pCurrencies().includes(c.cur)) ? c.cur : '';
+      return `<button class="chip ${F.city===n?'on':''}" data-city="${esc(n)}">${esc(n)}${cur?`<small>${cur}</small>`:''}</button>`;
+    }).join('');
+  } else if (cityWrap){
+    cityWrap.style.display = 'none';      // one place, or none: nothing to pick
+  }
+  $('#exPaid').innerHTML = pPeople().map(p =>
     `<button class="chip ${F.paid_by===p?'on':''}" data-paid="${esc(p)}">${esc(p)}</button>`).join('');
   $('#exCur').textContent = F.cur;
   $('#exDesc').value = F.desc;
@@ -1115,6 +1281,9 @@ function renderForm(){
   }
 
   const m = rateMeta(F.cur);
+  const single = pCurrencies().length === 1 && pCurrencies()[0] === 'AUD';
+  const audLine = $('#exAud').parentElement;
+  if (audLine) audLine.style.display = single ? 'none' : '';
   $('#exAud').textContent = '≈ ' + fmtAud(formAmount() * (m.rate || 0));
   $('#exRateTag').className = 'tag ' + (F.cur==='AUD' ? '' : m.missing||m.stale ? 'stale' : m.manual ? 'manual' : 'live');
   $('#exRateTag').textContent = F.cur === 'AUD' ? 'base'
@@ -1131,17 +1300,17 @@ function renderSplitBody(){
 
   if (t === 'equal'){
     box.innerHTML = `<label class="fl">Split between</label>
-      <div class="chips">${S.people.map(p =>
+      <div class="chips">${pPeople().map(p =>
         `<button class="chip ${F.participants.includes(p)?'on':''}" data-part="${esc(p)}">${esc(p)}</button>`).join('')}</div>`;
 
   } else if (t === 'exact' || t === 'percent'){
     const bag = t === 'exact' ? F.exact : F.percent;
     const unit = t === 'exact' ? F.cur : '%';
     const target = t === 'exact' ? formAmount() : 100;
-    const got = S.people.reduce((a,p) => a + (Number(bag[p]) || 0), 0);
+    const got = pPeople().reduce((a,p) => a + (Number(bag[p]) || 0), 0);
     const left = target - got;
     box.innerHTML = `<label class="fl">${t === 'exact' ? 'Exact amounts · '+F.cur : 'Percentages'}</label>
-      ${S.people.map(p => `
+      ${pPeople().map(p => `
         <div class="row" style="margin-bottom:8px">
           <div class="av">${esc(initials(p))}</div>
           <div class="grow" style="font-weight:620">${esc(p)}</div>
@@ -1163,7 +1332,7 @@ function renderSplitBody(){
             <input type="text" inputmode="decimal" data-iamt="${i}" value="${esc(it.amount)}" placeholder="0.00" style="width:96px;text-align:right">
             <button class="iconbtn" data-idel="${i}" title="Remove">×</button>
           </div>
-          <div class="chips">${S.people.map(p =>
+          <div class="chips">${pPeople().map(p =>
             `<button class="chip sm ${it.people.includes(p)?'on':''}" data-ip="${i}:${esc(p)}"
                      style="min-height:38px;padding:0 12px;font-size:13.5px">${esc(p)}</button>`).join('')}</div>
         </div>`).join('')}
@@ -1181,8 +1350,10 @@ function renderSplitBody(){
 function draftExpense(){
   const amt = formAmount();
   const rate = rateOf(F.cur);
+  const act = activeProject();
   const ex = {
-    id: F.id, date: F.date, city: F.city, description: F.desc.trim(),
+    id: F.id, project_id: act ? act.id : '',
+    date: F.date, city: F.city, description: F.desc.trim(),
     paid_by: F.paid_by, currency: F.cur,
     amount_local: round2(amt),
     amount_aud: round2(amt * rate),
@@ -1217,7 +1388,7 @@ function renderPreview(){
   if (!ex.amount_local){ $('#exPreview').innerHTML = `<div style="color:var(--muted);font-size:13.5px">Enter an amount to see the split.</div>`; return; }
   if (!rate){ $('#exPreview').innerHTML = `<div class="banner bad" style="margin:0">No exchange rate for ${esc(F.cur)}. Set one in Settings before saving.</div>`; return; }
   const sh = sharesOf(ex);
-  const rows = S.people.map(p => {
+  const rows = pPeople().map(p => {
     const c = sh[p] || 0;
     const local = ex.amount_local ? (c / cents(ex.amount_aud) * ex.amount_local) : 0;
     return `<div class="split-line"><span>${esc(p)}${p===ex.paid_by?' · paid':''}</span>
@@ -1293,14 +1464,14 @@ function openDetail(id){
         <b class="mono">${fmtAud(ex.amount_aud)}</b></div>
       <div class="hr"></div>
       <div class="split-line"><span>Date</span><b>${esc(ex.date)}</b></div>
-      <div class="split-line"><span>City</span><b>${esc(ex.city||'—')}</b></div>
+      ${ex.city ? `<div class="split-line"><span>Place</span><b>${esc(ex.city)}</b></div>` : ''}
       <div class="split-line"><span>Paid by</span><b>${esc(ex.paid_by)}</b></div>
       <div class="split-line"><span>Split</span><b>${esc(splitLabel(ex.split_type))}</b></div>
       <div class="split-line"><span>Rate used</span><b class="mono">${rate ? esc(fmtPerAud(ex.currency, rate)) : '—'}</b></div>
     </div>
     ${itemHtml}
     <div class="section-label">Share</div>
-    <div class="card">${S.people.map(p => `<div class="split-line"><span>${esc(p)}</span><b class="mono">${fmtAudC(sh[p]||0)}</b></div>`).join('')}</div>
+    <div class="card">${pPeople().map(p => `<div class="split-line"><span>${esc(p)}</span><b class="mono">${fmtAudC(sh[p]||0)}</b></div>`).join('')}</div>
     <button class="btn primary full" data-editex="${esc(ex.id)}">Edit</button>`;
   openSheet('detSheet');
 }
@@ -1361,8 +1532,10 @@ function openPay(i){
 function savePay(){
   const amt = Number($('#payAmt').value);
   if (!(amt > 0)){ toast('Enter an amount'); return; }
+  const act = activeProject();
   const st = {
     id: 's' + Date.now() + Math.floor(Math.random()*1000),
+    project_id: act ? act.id : '',
     from: payTx.from, to: payTx.to, amount_aud: round2(amt),
     date: today(), note: $('#payNote').value.trim()
   };
@@ -1384,7 +1557,8 @@ function unsettle(id){
 
 document.addEventListener('click', e => {
   const t = e.target.closest('[data-go],[data-close],[data-ex],[data-city],[data-paid],[data-part],' +
-    '[data-st],[data-fc],[data-fp],[data-rate],[data-pay],[data-unsettle],[data-editex],[data-ip],[data-idel],[data-me],[data-prm]');
+    '[data-st],[data-fc],[data-fp],[data-rate],[data-pay],[data-unsettle],[data-editex],[data-ip],[data-idel],[data-me],[data-prm],'+
+    '[data-proj],[data-pedit],[data-pecur],[data-pemem],[data-kind]');
   if (!t) return;
   const d = t.dataset;
 
@@ -1413,6 +1587,22 @@ document.addEventListener('click', e => {
     ensurePED();
     if (PED.length > 1){ PED.splice(Number(d.prm), 1); renderMore(); }
   }
+  else if (d.pedit){ openProjectEditor(d.pedit); }
+  else if (d.proj){ setActiveProject(d.proj); closeSheet('projSheet'); toast(projectById(d.proj).name); }
+  else if (d.pecur){
+    const i = PE.currencies.indexOf(d.pecur);
+    if (i >= 0){ if (PE.currencies.length > 1) PE.currencies.splice(i,1); }
+    else PE.currencies.push(d.pecur);
+    renderProjectEditor();
+  }
+  else if (d.pemem){
+    if (!PE.members.length) PE.members = S.people.slice();
+    const i = PE.members.indexOf(d.pemem);
+    if (i >= 0){ if (PE.members.length > 1) PE.members.splice(i,1); }
+    else PE.members.push(d.pemem);
+    renderProjectEditor();
+  }
+  else if (d.kind){ PE.kind = d.kind; renderProjectEditor(); }
   else if (d.rate) { openRate(d.rate); }
   else if (d.pay !== undefined && t.hasAttribute('data-pay')){ openPay(Number(d.pay)); }
   else if (d.unsettle){ unsettle(d.unsettle); }
@@ -1472,6 +1662,9 @@ document.addEventListener('input', e => {
 /* Light-touch updates that avoid re-rendering (and blurring) the live input. */
 function syncAudLine(){
   const m = rateMeta(F.cur);
+  const single = pCurrencies().length === 1 && pCurrencies()[0] === 'AUD';
+  const audLine = $('#exAud').parentElement;
+  if (audLine) audLine.style.display = single ? 'none' : '';
   $('#exAud').textContent = '≈ ' + fmtAud(formAmount() * (m.rate || 0));
 }
 function refreshItemTotals(){
@@ -1517,7 +1710,8 @@ $('#cfgSave').addEventListener('click', async () => {
   const prev = CFG; CFG = { url, token };
   try {
     const d = await call('bootstrap', {}, { refreshRates:true });
-    S = { people:d.people||[], expenses:d.expenses||[], rates:d.rates||[], settlements:d.settlements||[] };
+    S = { projects:d.projects||[], people:d.people||[], expenses:d.expenses||[], rates:d.rates||[], settlements:d.settlements||[] };
+    autoPickProject();
     save(K_CFG, CFG); persist();
     $('#setupMsg').innerHTML = '';
     renderAll(); go('home'); toast('Connected'); checkAi();
@@ -1530,7 +1724,7 @@ $('#cfgSave').addEventListener('click', async () => {
 $('#cfgClear').addEventListener('click', () => {
   if (QUEUE.length && !confirm(`${QUEUE.length} change(s) have not synced yet. Disconnect anyway?`)) return;
   localStorage.removeItem(K_CFG); localStorage.removeItem(K_STATE); localStorage.removeItem(K_QUEUE);
-  CFG = null; S = { people:[], expenses:[], rates:[], settlements:[] }; QUEUE = [];
+  CFG = null; S = { projects:[], people:[], expenses:[], rates:[], settlements:[] }; QUEUE = [];
   go('setup');
 });
 
@@ -1611,7 +1805,7 @@ function downscale(file, maxEdge){
 
 /** Push a parsed draft into the open form. Nothing is saved. */
 function applyDraft(d){
-  if (d.city && CITIES.some(c => c.name === d.city)) F.city = d.city;
+  if (d.city && pCities().includes(d.city)) F.city = d.city;
   F.cur          = d.currency || F.cur;
   F.desc         = d.description || F.desc;
   F.date         = d.date || F.date;
@@ -1669,6 +1863,7 @@ async function runScan(file){
       image, mediaType: 'image/jpeg',
       city: F.city, currency: F.cur,
       defaultPayer: F.paid_by,
+      cities: pCities(), currencies: pCurrencies(),
       hint: $('#scanHint').value.trim()
     });
     applyDraft(d.draft);
@@ -1687,7 +1882,8 @@ async function runSay(){
   busy(true, 'Working out the split…', 'Usually a few seconds');
   try {
     const d = await call('parseText', {
-      text, city: F.city, currency: F.cur, defaultPayer: F.paid_by
+      text, city: F.city, currency: F.cur, defaultPayer: F.paid_by,
+      cities: pCities(), currencies: pCurrencies()
     });
     applyDraft(d.draft);
     toast('Done — check it before saving');
@@ -1728,6 +1924,134 @@ document.addEventListener('click', e => {
     renderForm(); renderAiNote();
   }
 });
+
+/* ============================================================
+   Project switcher and editor
+   ============================================================ */
+
+function renderProjectHeader(){
+  const p = activeProject();
+  if (!p){ $('#projName').innerHTML = 'Trip Split'; $('#projMeta').textContent = ''; return; }
+  $('#projName').innerHTML = esc(p.name) + '<span style="font-size:15px;opacity:.5;margin-left:6px">⌄</span>';
+  const bits = [projectDates(p)];
+  if (p.cities && p.cities.length) bits.push(p.cities.length > 2 ? p.cities.length + ' places' : p.cities.join(' · '));
+  const cur = pCurrencies();
+  if (cur.length > 1) bits.push(cur.join('/'));
+  $('#projMeta').textContent = bits.join(' · ');
+}
+
+function renderProjectList(){
+  const act = activeProject();
+  $('#projList').innerHTML = projects().map(p => {
+    const rows = (S.expenses || []).filter(e => (e.project_id || '') === p.id);
+    const total = rows.reduce((a,e) => a + cents(e.amount_aud), 0);
+    const live = p.start_date && p.end_date && today() >= p.start_date && today() <= p.end_date;
+    return `<div class="bal press" data-proj="${esc(p.id)}" style="cursor:pointer">
+      <div class="av"${act && act.id===p.id ? ' style="background:var(--accent);color:var(--accent-ink)"' : ''}>${esc(initials(p.name))}</div>
+      <div class="grow">
+        <div style="font-weight:650">${esc(p.name)}${live ? ' <span class="tag live">now</span>' : ''}</div>
+        <div style="font-size:12.5px;color:var(--muted)">${esc(projectDates(p))} · ${rows.length} expense${rows.length===1?'':'s'} · ${fmtAudC(total)}</div>
+      </div>
+      <button class="iconbtn" data-pedit="${esc(p.id)}" title="Edit">✎</button>
+    </div>`;
+  }).join('') || `<div class="empty">No projects yet.</div>`;
+}
+
+let PE = null;   // the project being edited
+
+function openProjectEditor(id){
+  const p = id ? projectById(id) : null;
+  PE = p ? JSON.parse(JSON.stringify(p))
+         : { id:null, name:'', start_date:'', end_date:'', currencies:['AUD'], cities:[], members:[], archived:false };
+  PE.kind = (PE.start_date && PE.end_date) ? 'dated' : 'open';
+  $('#peTitle').textContent = p ? 'Edit project' : 'New project';
+  $('#peDelete').style.display = p && projects().length > 1 ? '' : 'none';
+  renderProjectEditor();
+  closeSheet('projSheet');
+  openSheet('projEdit');
+}
+
+function renderProjectEditor(){
+  $('#peName').value  = PE.name;
+  $('#peStart').value = PE.start_date;
+  $('#peEnd').value   = PE.end_date;
+  $('#pePlaces').value = (PE.cities || []).join(', ');
+  $('#peDates').style.display = PE.kind === 'dated' ? '' : 'none';
+  $$('#peKind button').forEach(b => b.classList.toggle('on', b.dataset.kind === PE.kind));
+
+  $('#peCur').innerHTML = CURS.map(c =>
+    `<button class="chip ${PE.currencies.includes(c)?'on':''}" data-pecur="${c}">${c}</button>`).join('');
+
+  $('#peMembers').innerHTML = S.people.map(n => {
+    const on = !PE.members.length || PE.members.includes(n);
+    return `<button class="chip ${on?'on':''}" data-pemem="${esc(n)}">${esc(n)}</button>`;
+  }).join('') + `<div style="font-size:12.5px;color:var(--muted);margin-top:8px;width:100%">
+      Everyone is in by default. Tap to leave someone out of this project.</div>`;
+}
+
+function saveProject(){
+  const name = $('#peName').value.trim();
+  if (!name){ toast('Give the project a name'); return; }
+
+  PE.name = name;
+  PE.cities = $('#pePlaces').value.split(',').map(x => x.trim()).filter(Boolean);
+  if (!PE.currencies.length) PE.currencies = ['AUD'];
+
+  if (PE.kind === 'dated'){
+    PE.start_date = $('#peStart').value;
+    PE.end_date   = $('#peEnd').value;
+    if (!PE.start_date || !PE.end_date){ toast('Set both dates, or switch to Ongoing'); return; }
+    if (PE.end_date < PE.start_date){ toast('The end date is before the start date'); return; }
+    const clash = projects().find(q => q.id !== PE.id && q.start_date && q.end_date &&
+      PE.start_date <= q.end_date && q.start_date <= PE.end_date);
+    if (clash && !confirm(`Those dates overlap "${clash.name}". Only one of them can auto-open on a given day. Save anyway?`)) return;
+  } else {
+    PE.start_date = ''; PE.end_date = '';
+    const other = projects().find(q => q.id !== PE.id && !q.start_date && !q.end_date);
+    if (other && !PE.id){
+      // Harmless, but the calendar fallback only picks the first one.
+      toast(`"${other.name}" is already the ongoing one — this won't auto-open`);
+    }
+  }
+  // Empty means everyone; storing the full list would freeze the roster.
+  if (PE.members.length === S.people.length) PE.members = [];
+
+  const rec = { id:PE.id, name:PE.name, start_date:PE.start_date, end_date:PE.end_date,
+                currencies:PE.currencies, cities:PE.cities, members:PE.members, archived:false };
+
+  if (rec.id){
+    S.projects = S.projects.map(x => x.id === rec.id ? rec : x);
+    enqueue('updateProject', rec);
+  } else {
+    rec.id = 'pr' + Date.now() + Math.floor(Math.random()*1000);
+    S.projects.push(rec);
+    enqueue('addProject', rec);
+    setActiveProject(rec.id);
+  }
+  PE = null;
+  persist(); renderAll(); closeSheet('projEdit');
+  toast('Project saved');
+}
+
+function deleteProjectLocal(){
+  if (!PE || !PE.id) return;
+  const n = (S.expenses||[]).filter(e => (e.project_id||'') === PE.id).length;
+  if (!confirm(`Delete "${PE.name}"?\n\nThis also deletes its ${n} expense(s) and any settlements. It cannot be undone.`)) return;
+  const id = PE.id;
+  S.projects    = S.projects.filter(p => p.id !== id);
+  S.expenses    = (S.expenses||[]).filter(e => (e.project_id||'') !== id);
+  S.settlements = (S.settlements||[]).filter(x => (x.project_id||'') !== id);
+  enqueue('deleteProject', { id });
+  PE = null;
+  if (PREFS.pid === id) setActiveProject(projects()[0] ? projects()[0].id : '');
+  persist(); renderAll(); closeSheet('projEdit');
+  toast('Project deleted');
+}
+
+$('#projBtn').addEventListener('click', () => { renderProjectList(); openSheet('projSheet'); });
+$('#newProj').addEventListener('click', () => openProjectEditor(null));
+$('#peSave').addEventListener('click', saveProject);
+$('#peDelete').addEventListener('click', deleteProjectLocal);
 
 /* ============================================================
    Gestures — the things that separate a home-screen web page
@@ -1842,6 +2166,7 @@ function countUp(el, to, fmt){
 }
 
 /* ---------------- boot ---------------- */
+autoPickProject();
 renderAll();
 if (CFG && CFG.url){ go('home'); sync(); checkAi(); }
 else go('setup');
