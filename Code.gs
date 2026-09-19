@@ -18,8 +18,19 @@ var SHEET_RATES       = 'ExchangeRates';
 var SHEET_SETTLEMENTS = 'Settlements';
 var SHEET_PROJECTS    = 'Projects';
 
-var CURRENCIES = ['AUD', 'HKD', 'MOP', 'CNY'];
-var CITY_NAMES = ['Hong Kong', 'Macau', 'Guangzhou', 'Chongqing', 'Chengdu', 'Sydney'];
+// Only the starting set. The ExchangeRates tab is the real list from then on,
+// so currencies can be added later without touching this file.
+var DEFAULT_CURRENCIES = ['AUD', 'HKD', 'MOP', 'CNY'];
+var CITY_NAMES = ['Hong Kong', 'Macau', 'China', 'Sydney'];
+
+/** Every currency the sheet knows about. AUD is always first and always present. */
+function CURRENCIES() {
+  var list = readRows(SHEET_RATES)
+    .map(function (r) { return String(r.currency || '').trim().toUpperCase(); })
+    .filter(function (c) { return /^[A-Z]{3}$/.test(c); });
+  if (list.indexOf('AUD') < 0) list.unshift('AUD');
+  return list.filter(function (c, i) { return list.indexOf(c) === i; });
+}
 
 var HEADERS = {};
 HEADERS[SHEET_PEOPLE]      = ['name'];
@@ -64,7 +75,7 @@ function setup() {
   // Seed rate rows only if empty.
   var rates = ss.getSheetByName(SHEET_RATES);
   if (rates.getLastRow() < 2) {
-    rates.getRange(2, 1, CURRENCIES.length, 4).setValues(CURRENCIES.map(function (c) {
+    rates.getRange(2, 1, DEFAULT_CURRENCIES.length, 4).setValues(DEFAULT_CURRENCIES.map(function (c) {
       return [c, c === 'AUD' ? 1 : '', '', false];
     }));
   }
@@ -74,12 +85,13 @@ function setup() {
   if (projects.getLastRow() < 2) {
     projects.getRange(2, 1, 2, 8).setValues([
       ['p_trip', 'Greater China 2026', '2026-10-16', '2026-11-01',
-       'AUD,HKD,MOP,CNY', CITY_NAMES.join(','), '', false],
+       'AUD,HKD,MOP,CNY', 'Hong Kong,Macau,China,Sydney', '', false],
       ['p_general', 'General', '', '', 'AUD', '', '', false]
     ]);
   }
 
   migrateProjectIds();
+  mergeChinaCities();
 
   // Generate an API token if there isn't one.
   var props = PropertiesService.getScriptProperties();
@@ -93,6 +105,7 @@ function setup() {
   // Sheet's UI is available to show a dialog.
   Logger.log('setup() finished on "' + ss.getName() + '"');
   Logger.log('Projects: ' + getProjects().map(function (p) { return p.name; }).join(', '));
+  Logger.log('Currencies: ' + CURRENCIES().join(', '));
   Logger.log('Tabs ready: ' + Object.keys(HEADERS).join(', '));
   Logger.log('People: ' + getPeople().join(', '));
   Logger.log('');
@@ -233,6 +246,8 @@ function handle(e, req) {
       case 'deleteExpense':out = { id: deleteExpense(payload.id) }; break;
       case 'setPeople':    out = { people: setPeople(payload.people) }; break;
       case 'setRate':      out = { rates: setRate(payload.currency, payload.rate_to_aud) }; break;
+      case 'addCurrency':  out = { rates: addCurrency(payload.currency) }; break;
+      case 'removeCurrency': out = { rates: removeCurrency(payload.currency) }; break;
       case 'clearOverride':out = { rates: clearOverride(payload.currency) }; break;
       case 'refreshRates': out = { rates: refreshRates(true) }; break;
       case 'addProject':   out = { project: addProject(payload) }; break;
@@ -436,6 +451,42 @@ function deleteProject(id) {
 }
 
 /**
+ * The three mainland cities all spend CNY, so they are one place now. Renaming
+ * them is cosmetic — the currency and every amount are untouched.
+ */
+function mergeChinaCities() {
+  var sh = sheet(SHEET_EXPENSES);
+  var last = sh.getLastRow();
+  if (last < 2) return 0;
+
+  var col = HEADERS[SHEET_EXPENSES].indexOf('city') + 1;
+  var vals = sh.getRange(2, col, last - 1, 1).getValues();
+  var merge = { 'Guangzhou': 1, 'Chongqing': 1, 'Chengdu': 1 };
+  var n = 0;
+
+  for (var i = 0; i < vals.length; i++) {
+    if (merge[String(vals[i][0]).trim()]) { vals[i][0] = 'China'; n++; }
+  }
+  if (n) {
+    sh.getRange(2, col, vals.length, 1).setValues(vals);
+    Logger.log('Merged ' + n + ' expense(s) from Guangzhou/Chongqing/Chengdu into "China".');
+  }
+
+  // Bring any project still listing the old cities into line.
+  getProjects().forEach(function (p) {
+    if (!p.cities.length) return;
+    var next = [], changed = false;
+    p.cities.forEach(function (c) {
+      var name = merge[c] ? 'China' : c;
+      if (merge[c]) changed = true;
+      if (next.indexOf(name) < 0) next.push(name);
+    });
+    if (changed) { p.cities = next; updateProject(p); }
+  });
+  return n;
+}
+
+/**
  * Give every row without a project_id one, choosing by date where a project
  * has a range and falling back to the first project otherwise. Safe to re-run.
  */
@@ -605,9 +656,12 @@ function readRates() {
 }
 
 function writeRates(map) {
+  // Read the currency list BEFORE clearing — CURRENCIES() reads this same tab,
+  // and clearing first would leave nothing to rebuild from.
+  var list = CURRENCIES();
   var sh = sheet(SHEET_RATES);
   if (sh.getLastRow() > 1) sh.getRange(2, 1, sh.getLastRow() - 1, 4).clearContent();
-  var rows = CURRENCIES.map(function (c) {
+  var rows = list.map(function (c) {
     var r = map[c] || { rate_to_aud: c === 'AUD' ? 1 : 0, last_updated: '', is_manual_override: false };
     return [c, r.rate_to_aud, r.last_updated, !!r.is_manual_override];
   });
@@ -627,7 +681,7 @@ function ratesOut(rows) {
 }
 
 function asList(map) {
-  return CURRENCIES.map(function (c) {
+  return CURRENCIES().map(function (c) {
     var r = map[c] || {};
     return {
       currency: c,
@@ -648,7 +702,7 @@ function refreshRates(force) {
 
   map.AUD = { currency: 'AUD', rate_to_aud: 1, last_updated: today, is_manual_override: false };
 
-  var stale = CURRENCIES.some(function (c) {
+  var stale = CURRENCIES().some(function (c) {
     if (c === 'AUD') return false;
     var r = map[c];
     if (!r || !r.rate_to_aud) return true;
@@ -658,9 +712,9 @@ function refreshRates(force) {
 
   if (!force && !stale) return asList(map);
 
-  var live = fetchLiveRates();
+  var live = fetchLiveRates(CURRENCIES());
   if (live) {
-    CURRENCIES.forEach(function (c) {
+    CURRENCIES().forEach(function (c) {
       if (c === 'AUD') return;
       if (map[c] && map[c].is_manual_override) return;   // overrides persist until cleared
       if (!live[c]) return;
@@ -674,15 +728,17 @@ function refreshRates(force) {
   }
 
   // Last-resort seed so the app is never unusable with a zero rate.
+  // Only the original four have a sane offline guess; a currency added later
+  // stays at zero and the app shows "no rate" rather than inventing one.
   var FALLBACK = { HKD: 0.19, MOP: 0.185, CNY: 0.21 };
-  CURRENCIES.forEach(function (c) {
+  CURRENCIES().forEach(function (c) {
     if (c === 'AUD') return;
-    if (!map[c] || !map[c].rate_to_aud) {
+    if ((!map[c] || !map[c].rate_to_aud) && FALLBACK[c]) {
       map[c] = { currency: c, rate_to_aud: FALLBACK[c], last_updated: '', is_manual_override: false };
     }
   });
 
-  var rows = CURRENCIES.map(function (c) {
+  var rows = CURRENCIES().map(function (c) {
     return [c, map[c].rate_to_aud, map[c].last_updated, !!map[c].is_manual_override];
   });
   var sh = sheet(SHEET_RATES);
@@ -698,7 +754,9 @@ function refreshRates(force) {
  * MOP is then derived from its de-facto 1.03 MOP : 1 HKD peg.
  * Returns { HKD: audPerUnit, MOP: ..., CNY: ... } or null.
  */
-function fetchLiveRates() {
+function fetchLiveRates(wanted) {
+  var want = (wanted && wanted.length) ? wanted : CURRENCIES();
+  want = want.filter(function (c) { return c !== 'AUD'; });
   var out = null;
 
   try {
@@ -708,34 +766,71 @@ function fetchLiveRates() {
       var d = JSON.parse(res.getContentText());
       if (d && d.rates) {
         out = {};
-        ['HKD', 'MOP', 'CNY'].forEach(function (c) {
+        want.forEach(function (c) {
           if (d.rates[c]) out[c] = 1 / Number(d.rates[c]);   // AUD per 1 unit
         });
-        if (out.HKD && out.MOP && out.CNY) return out;
+        var missing = want.filter(function (c) { return !out[c]; });
+        if (!missing.length) return out;
       }
     }
   } catch (err) { /* fall through */ }
 
   try {
-    var res2 = UrlFetchApp.fetch('https://api.frankfurter.app/latest?from=AUD&to=HKD,CNY',
+    var res2 = UrlFetchApp.fetch(
+      'https://api.frankfurter.app/latest?from=AUD&to=' + encodeURIComponent(want.join(',')),
       { muteHttpExceptions: true, followRedirects: true });
     if (res2.getResponseCode() === 200) {
       var d2 = JSON.parse(res2.getContentText());
       if (d2 && d2.rates) {
         out = out || {};
-        if (d2.rates.HKD) out.HKD = 1 / Number(d2.rates.HKD);
-        if (d2.rates.CNY) out.CNY = 1 / Number(d2.rates.CNY);
-        if (out.HKD && !out.MOP) out.MOP = out.HKD / 1.03;   // MOP pegged to HKD
+        want.forEach(function (c) {
+          if (!out[c] && d2.rates[c]) out[c] = 1 / Number(d2.rates[c]);
+        });
       }
     }
   } catch (err2) { /* fall through */ }
 
+  // Frankfurter's ECB feed has no MOP, which is pegged to the HKD.
+  if (out && !out.MOP && out.HKD && want.indexOf('MOP') >= 0) out.MOP = out.HKD / 1.03;
+
   return out;
+}
+
+/**
+ * Add a currency. The live-rate API is asked for it first, so a typo or a code
+ * nobody quotes is rejected here rather than silently producing a dead row.
+ */
+function addCurrency(code) {
+  var cur = String(code || '').trim().toUpperCase();
+  if (!/^[A-Z]{3}$/.test(cur)) throw new Error('A currency code is three letters, like SGD or JPY.');
+  if (CURRENCIES().indexOf(cur) >= 0) throw new Error(cur + ' is already there.');
+
+  var live = fetchLiveRates([cur]);
+  if (!live || !live[cur]) {
+    throw new Error('No live rate available for ' + cur + '. Check the code, or add it ' +
+                    'manually by typing a row into the ExchangeRates tab.');
+  }
+  sheet(SHEET_RATES).appendRow([
+    cur, live[cur],
+    Utilities.formatDate(new Date(), Session.getScriptTimeZone(), "yyyy-MM-dd'T'HH:mm:ss"),
+    false
+  ]);
+  return refreshRates(false);
+}
+
+/** Remove a currency. Expenses already recorded in it keep their AUD amounts. */
+function removeCurrency(code) {
+  var cur = String(code || '').trim().toUpperCase();
+  if (cur === 'AUD') throw new Error('AUD is the base currency and cannot be removed.');
+  var r = findRowById(SHEET_RATES, cur);
+  if (r < 0) throw new Error(cur + ' is not in the list.');
+  sheet(SHEET_RATES).deleteRow(r);
+  return refreshRates(false);
 }
 
 function setRate(currency, rate) {
   var cur = String(currency).trim().toUpperCase();
-  if (CURRENCIES.indexOf(cur) < 0) throw new Error('Unsupported currency: ' + cur);
+  if (CURRENCIES().indexOf(cur) < 0) throw new Error('Unsupported currency: ' + cur);
   if (cur === 'AUD') throw new Error('AUD is the base currency and is always 1');
   var val = Number(rate);
   if (!(val > 0)) throw new Error('Rate must be greater than 0');
@@ -843,7 +938,7 @@ function testAi() {
 /** The shape every parse returns. All fields required so the schema stays strict. */
 function draftSchema(people, cities, currencies) {
   cities     = (cities && cities.length) ? cities : CITY_NAMES;
-  currencies = (currencies && currencies.length) ? currencies : CURRENCIES;
+  currencies = (currencies && currencies.length) ? currencies : CURRENCIES();
   return {
     type: 'object',
     additionalProperties: false,
@@ -932,7 +1027,7 @@ function draftSystemPrompt(people, city, currency, defaultPayer, todayStr, citie
 /** Provider-agnostic entry point. Both paths return the same normalised draft. */
 function aiDraft(parts, people, city, currency, defaultPayer, cities, currencies) {
   cities     = (cities && cities.length) ? cities : CITY_NAMES;
-  currencies = (currencies && currencies.length) ? currencies : CURRENCIES;
+  currencies = (currencies && currencies.length) ? currencies : CURRENCIES();
   var who = aiProvider();
   if (!who) {
     throw new Error('AI features are off. Run setGeminiKey("AIza...") for the free option, ' +
@@ -1257,7 +1352,7 @@ function geminiCall(system, parts, people, cities, currencies) {
 /** Trust nothing from the model: clamp names, currency and numbers to what the app allows. */
 function normaliseDraft(d, people, fallbackCurrency, fallbackCity, cities, currencies) {
   cities     = (cities && cities.length) ? cities : CITY_NAMES;
-  currencies = (currencies && currencies.length) ? currencies : CURRENCIES;
+  currencies = (currencies && currencies.length) ? currencies : CURRENCIES();
   function person(n) { return people.indexOf(String(n)) >= 0 ? String(n) : null; }
   function num(v) { var x = Number(v); return isFinite(x) && x > 0 ? Math.round(x * 100) / 100 : 0; }
 

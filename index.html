@@ -309,7 +309,10 @@ select{background-image:linear-gradient(45deg,transparent 50%,var(--muted) 50%),
 
   <div class="section-label" style="margin-top:4px">Exchange rates · per 1 AUD</div>
   <div class="card" id="ratesBox"></div>
-  <button class="btn ghost full sm" id="refreshRates" style="margin-bottom:6px">Fetch today's live rates</button>
+  <div class="row" style="gap:8px;margin-bottom:6px">
+    <button class="btn ghost grow sm" id="refreshRates">Fetch live rates</button>
+    <button class="btn ghost grow sm" id="addCurBtn">+ Add currency</button>
+  </div>
   <p class="sub">Live rates come from open.er-api.com (Frankfurter as backup) and are cached in the ExchangeRates tab for the day. A manual override sticks until you clear it.</p>
 
   <div class="section-label">People</div>
@@ -361,6 +364,10 @@ select{background-image:linear-gradient(45deg,transparent 50%,var(--muted) 50%),
       <div>
         <label class="fl">City</label>
         <div class="chips" id="exCity"></div>
+      </div>
+      <div id="exCurWrap">
+        <label class="fl">Currency</label>
+        <div class="chips" id="exCurChips"></div>
       </div>
       <div>
         <label class="fl" for="exAmount">Amount · <span id="exCur">HKD</span></label>
@@ -424,6 +431,7 @@ select{background-image:linear-gradient(45deg,transparent 50%,var(--muted) 50%),
       <div style="font-size:13px;color:var(--muted)" id="rateHelp"></div>
       <button class="btn primary full" id="rateSave">Save as manual override</button>
       <button class="btn ghost full sm" id="rateClear">Clear override, use live rate</button>
+      <button class="btn danger full sm" id="rateRemove">Remove this currency</button>
     </div>
   </div>
 </div>
@@ -548,6 +556,30 @@ select{background-image:linear-gradient(45deg,transparent 50%,var(--muted) 50%),
   </div>
 </div>
 
+<!-- ============ ADD CURRENCY ============ -->
+<div class="sheet" id="curSheet">
+  <div class="scrim" data-close="curSheet"></div>
+  <div class="panel">
+    <div class="grab"></div>
+    <div class="sheet-head"><h2>Add a currency</h2><button class="btn sm ghost" data-close="curSheet">Cancel</button></div>
+    <div class="card stack">
+      <div>
+        <label class="fl" for="curCode">Three-letter code</label>
+        <input id="curCode" type="text" maxlength="3" autocapitalize="characters" autocorrect="off"
+               spellcheck="false" placeholder="JPY" style="text-transform:uppercase;font-size:24px;font-weight:700;text-align:center;letter-spacing:.12em">
+      </div>
+      <div>
+        <label class="fl">Common ones</label>
+        <div class="chips" id="curQuick"></div>
+      </div>
+      <button class="btn primary full" id="curAdd">Add and fetch today's rate</button>
+      <div style="font-size:12.5px;color:var(--muted)">
+        The rate is fetched straight away, so a code nobody quotes is rejected here
+        rather than turning up as a dead row later.</div>
+    </div>
+  </div>
+</div>
+
 <div class="ptr" id="ptr"><div class="ring"></div></div>
 <div class="toast" id="toast"></div>
 <script>
@@ -558,16 +590,34 @@ select{background-image:linear-gradient(45deg,transparent 50%,var(--muted) 50%),
    reachable. The UI never waits on the network.
    ============================================================ */
 
+/* Places are free text per project. This is only a hint for auto-selecting a
+   currency when you tap one — unknown places just keep the current currency. */
 const CITIES = [
   { name:'Hong Kong', cur:'HKD' },
   { name:'Macau',     cur:'MOP' },
+  { name:'China',     cur:'CNY' },
+  { name:'Sydney',    cur:'AUD' },
+  // kept so expenses recorded before the mainland cities were merged still
+  // resolve to the right currency
   { name:'Guangzhou', cur:'CNY' },
   { name:'Chongqing', cur:'CNY' },
-  { name:'Chengdu',   cur:'CNY' },
-  { name:'Sydney',    cur:'AUD' }
+  { name:'Chengdu',   cur:'CNY' }
 ];
-const SYM  = { AUD:'A$', HKD:'HK$', MOP:'MOP$', CNY:'¥' };
-const CURS = ['AUD','HKD','MOP','CNY'];
+/* Symbols for the ones people actually meet; anything else falls back to the
+   code itself, which reads fine ("SGD 12.00") and needs no maintenance. */
+const SYMBOLS = {
+  AUD:'A$', HKD:'HK$', MOP:'MOP$', CNY:'¥', USD:'US$', NZD:'NZ$', SGD:'S$',
+  GBP:'£', EUR:'€', JPY:'¥', KRW:'₩', THB:'฿', VND:'₫', PHP:'₱', INR:'₹',
+  IDR:'Rp', MYR:'RM', TWD:'NT$', CAD:'C$', CHF:'CHF ', ILS:'₪', TRY:'₺'
+};
+const SYM = new Proxy(SYMBOLS, { get: (t,k) => t[k] || (typeof k === 'string' ? k + ' ' : '') });
+
+/** Whatever the Sheet knows about, AUD first. */
+function CURS(){
+  const list = (S.rates || []).map(r => r.currency).filter(Boolean);
+  if (!list.includes('AUD')) list.unshift('AUD');
+  return list.filter((c,i) => list.indexOf(c) === i);
+}
 const K_CFG='tsplit.cfg', K_STATE='tsplit.state', K_QUEUE='tsplit.queue', K_PREFS='tsplit.prefs';
 
 let CFG   = load(K_CFG,   null);
@@ -1126,7 +1176,7 @@ function involvedCount(name){
 /* ---------------- render: more ---------------- */
 
 function renderMore(){
-  $('#ratesBox').innerHTML = CURS.map(c => {
+  $('#ratesBox').innerHTML = CURS().map(c => {
     const m = rateMeta(c);
     const tag = c === 'AUD' ? '<span class="tag">base</span>'
       : m.missing ? '<span class="tag stale">no rate</span>'
@@ -1201,10 +1251,11 @@ function newForm(){
     items:[{ name:'', amount:'', people:pPeople().slice() }], extra:''
   };
 }
-function curOf(city){
+function curOf(city, fallback){
   const known = CITIES.find(c => c.name === city);
   const allowed = pCurrencies();
   if (known && allowed.includes(known.cur)) return known.cur;
+  if (fallback && allowed.includes(fallback)) return fallback;
   return allowed[0] || 'AUD';
 }
 
@@ -1254,7 +1305,7 @@ function formAmount(){
 
 function renderForm(){
   const cityList = pCities();
-  const cityWrap = $('#exCity').closest('div');
+  const cityWrap = $('#exCity').parentElement;   // closest('div') would match #exCity itself
   if (cityList.length > 1){
     if (cityWrap) cityWrap.style.display = '';
     $('#exCity').innerHTML = cityList.map(n => {
@@ -1267,6 +1318,10 @@ function renderForm(){
   }
   $('#exPaid').innerHTML = pPeople().map(p =>
     `<button class="chip ${F.paid_by===p?'on':''}" data-paid="${esc(p)}">${esc(p)}</button>`).join('');
+  const curList = pCurrencies();
+  $('#exCurWrap').style.display = curList.length > 1 ? '' : 'none';
+  $('#exCurChips').innerHTML = curList.map(c =>
+    `<button class="chip ${F.cur===c?'on':''}" data-curpick="${c}">${c}</button>`).join('');
   $('#exCur').textContent = F.cur;
   $('#exDesc').value = F.desc;
   $('#exDate').value = F.date;
@@ -1478,6 +1533,67 @@ function openDetail(id){
 
 /* ---------------- rates ---------------- */
 
+const COMMON_CURRENCIES = ['JPY','USD','EUR','GBP','SGD','THB','KRW','TWD','VND','NZD','IDR','MYR','PHP','INR'];
+
+function openAddCurrency(){
+  $('#curCode').value = '';
+  const have = CURS();
+  $('#curQuick').innerHTML = COMMON_CURRENCIES
+    .filter(c => !have.includes(c))
+    .map(c => `<button class="chip" data-curq="${c}">${c}</button>`).join('')
+    || '<div style="font-size:13px;color:var(--muted)">All the common ones are already added.</div>';
+  openSheet('curSheet');
+}
+
+async function addCurrency(code){
+  const cur = String(code || '').trim().toUpperCase();
+  if (!/^[A-Z]{3}$/.test(cur)){ toast('A currency code is three letters'); return; }
+  if (CURS().includes(cur)){ toast(cur + ' is already there'); return; }
+
+  closeSheet('curSheet');
+  busy(true, 'Adding ' + cur + '…', 'Fetching today\u2019s rate');
+  try {
+    const d = await call('addCurrency', { currency: cur });
+    S.rates = d.rates; persist(); renderMore();
+    const m = rateMeta(cur);
+    toast(m.rate ? fmtPerAud(cur, m.rate, 2) : cur + ' added');
+  } catch(err){
+    toast(aiError(err));
+  } finally {
+    busy(false);
+  }
+}
+
+async function removeCurrency(cur){
+  const used = (S.expenses || []).filter(e => e.currency === cur).length;
+  const note = used
+    ? `${used} expense(s) were entered in ${cur}. They keep their AUD amounts and stay correct — ` +
+      `you just won't be able to pick ${cur} for new ones.\n\nRemove it?`
+    : `Remove ${cur}?`;
+  if (!confirm(note)) return;
+
+  closeSheet('rateSheet');
+  busy(true, 'Removing ' + cur + '…');
+  try {
+    const d = await call('removeCurrency', { currency: cur });
+    S.rates = d.rates;
+    // Drop it from any project that listed it, so the picker stays honest.
+    (S.projects || []).forEach(p => {
+      if (p.currencies && p.currencies.includes(cur)){
+        p.currencies = p.currencies.filter(x => x !== cur);
+        if (!p.currencies.length) p.currencies = ['AUD'];
+        enqueue('updateProject', p);
+      }
+    });
+    persist(); renderAll(); renderMore();
+    toast(cur + ' removed');
+  } catch(err){
+    toast(aiError(err));
+  } finally {
+    busy(false);
+  }
+}
+
 let rateCur = null;
 function openRate(cur){
   rateCur = cur;
@@ -1491,6 +1607,7 @@ function openRate(cur){
       `At this rate ${fmtAud(100)} buys ${fmtCur(100 * perAud(m.rate), cur)}, and ${fmtCur(100,cur)} costs ${fmtAud(100*m.rate)}. ` +
       `Past expenses keep the rate they were saved with.`;
   $('#rateClear').style.display = m.manual ? '' : 'none';
+  $('#rateRemove').style.display = cur === 'AUD' ? 'none' : '';
   openSheet('rateSheet');
 }
 
@@ -1499,7 +1616,7 @@ function saveRate(){
   if (!(entered > 0)){ toast('Enter a rate above 0'); return; }
   // Keep plenty of precision so flipping it back for display doesn't drift.
   const v = Math.round((1 / entered) * 1e8) / 1e8;
-  S.rates = CURS.map(c => {
+  S.rates = CURS().map(c => {
     const ex = (S.rates||[]).find(r => r.currency === c) || { currency:c, rate_to_aud:c==='AUD'?1:0, last_updated:'', is_manual_override:false };
     return c === rateCur
       ? { currency:c, rate_to_aud:v, last_updated:today(), is_manual_override:true }
@@ -1558,7 +1675,7 @@ function unsettle(id){
 document.addEventListener('click', e => {
   const t = e.target.closest('[data-go],[data-close],[data-ex],[data-city],[data-paid],[data-part],' +
     '[data-st],[data-fc],[data-fp],[data-rate],[data-pay],[data-unsettle],[data-editex],[data-ip],[data-idel],[data-me],[data-prm],'+
-    '[data-proj],[data-pedit],[data-pecur],[data-pemem],[data-kind]');
+    '[data-proj],[data-pedit],[data-pecur],[data-pemem],[data-kind],[data-curpick],[data-curq]');
   if (!t) return;
   const d = t.dataset;
 
@@ -1567,7 +1684,7 @@ document.addEventListener('click', e => {
   else if (d.ex)   { openDetail(d.ex); }
   else if (d.editex){ closeSheet('detSheet'); openEdit(d.editex); }
   else if (d.city !== undefined && d.city !== ''){
-    F.city = d.city; F.cur = curOf(d.city); renderForm();
+    F.city = d.city; F.cur = curOf(d.city, F.cur); renderForm();
   }
   else if (d.paid) { F.paid_by = d.paid; renderForm(); }
   else if (d.part) {
@@ -1587,6 +1704,8 @@ document.addEventListener('click', e => {
     ensurePED();
     if (PED.length > 1){ PED.splice(Number(d.prm), 1); renderMore(); }
   }
+  else if (d.curpick){ F.cur = d.curpick; renderForm(); }
+  else if (d.curq){ addCurrency(d.curq); }
   else if (d.pedit){ openProjectEditor(d.pedit); }
   else if (d.proj){ setActiveProject(d.proj); closeSheet('projSheet'); toast(projectById(d.proj).name); }
   else if (d.pecur){
@@ -1691,6 +1810,9 @@ $('#addBtn').addEventListener('click', openAdd);
 $('#exSave').addEventListener('click', saveExpense);
 $('#exDelete').addEventListener('click', deleteExpense);
 $('#rateSave').addEventListener('click', saveRate);
+$('#rateRemove').addEventListener('click', () => removeCurrency(rateCur));
+$('#addCurBtn').addEventListener('click', openAddCurrency);
+$('#curAdd').addEventListener('click', () => addCurrency($('#curCode').value));
 $('#rateClear').addEventListener('click', clearRate);
 $('#paySave').addEventListener('click', savePay);
 $('#syncBtn').addEventListener('click', () => sync());
@@ -1979,7 +2101,7 @@ function renderProjectEditor(){
   $('#peDates').style.display = PE.kind === 'dated' ? '' : 'none';
   $$('#peKind button').forEach(b => b.classList.toggle('on', b.dataset.kind === PE.kind));
 
-  $('#peCur').innerHTML = CURS.map(c =>
+  $('#peCur').innerHTML = CURS().map(c =>
     `<button class="chip ${PE.currencies.includes(c)?'on':''}" data-pecur="${c}">${c}</button>`).join('');
 
   $('#peMembers').innerHTML = S.people.map(n => {

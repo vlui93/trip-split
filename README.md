@@ -8,8 +8,9 @@ carries on around it.
 Single-page vanilla HTML/CSS/JS, no build tooling. The frontend is served from
 GitHub Pages; all data lives in a Google Sheet behind an Apps Script Web App.
 
-- **Currencies:** AUD, HKD, MOP, CNY. Every expense is entered in local currency
-  and converted to AUD for balance-keeping; both amounts stay visible everywhere.
+- **Currencies:** starts with AUD, HKD, MOP and CNY; add any other three-letter
+  code in Settings. Every expense is entered in its local currency and converted
+  to AUD for balance-keeping, with both amounts visible everywhere.
 - **Splits:** equal, exact amounts, percentages, and itemized (line items assigned
   to one or more people, with tax/tip prorated across whoever is on that receipt).
 - **Settle Up:** computes the fewest transactions that clear every balance, so a
@@ -343,7 +344,7 @@ Two exist out of the box:
 
 | | Dates | Currencies | Places |
 |---|---|---|---|
-| **Greater China 2026** | 16 Oct – 1 Nov 2026 | AUD, HKD, MOP, CNY | the five cities + Sydney |
+| **Greater China 2026** | 16 Oct – 1 Nov 2026 | AUD, HKD, MOP, CNY | Hong Kong, Macau, China, Sydney |
 | **General** | ongoing | AUD | none |
 
 Tap the title on the home screen to switch, edit, or add one.
@@ -411,6 +412,38 @@ and the daily refresh will not touch it until you tap **Clear override**.
 silently rewrite what last week's dinner cost. The rate used is shown on each
 expense's detail view.
 
+## Adding currencies
+
+The `ExchangeRates` tab is the list — not a constant in the code — so **More →
++ Add currency** extends it at any time. Type a three-letter code, or tap one of
+the common ones.
+
+The rate is fetched as you add it, so a typo or a code nobody quotes is rejected
+there and then rather than turning up later as a row with no rate. From that
+point it behaves like the others: refreshed daily, overridable by hand, available
+to any project whose currency list includes it.
+
+Removing one asks first, and says how many expenses were entered in it. Those
+expenses keep their AUD amounts and stay correct — the currency just stops being
+offered for new ones. AUD cannot be removed; it is what everything converts to.
+
+Currencies without a built-in symbol display as the code (`SGD 12.00`), which
+needs no maintenance as the list grows.
+
+## Places and currencies are separate
+
+A place is a label; the currency is picked on its own row. Tapping a place
+*suggests* a currency — China suggests CNY, Sydney suggests AUD — but you can
+change it, which matters for an airport lounge or a hotel billing in USD.
+
+Guangzhou, Chongqing and Chengdu were three places sharing one currency, so
+they're now just **China**. `setup()` renames them on existing expenses and in
+any project still listing them; nothing but the label changes. Expenses recorded
+under the old names still resolve to CNY.
+
+Places are free text per project, so a future trip is `Tokyo, Kyoto` and a
+flatshare has none at all.
+
 ## How the splits work
 
 - **Equal** — tap people off to exclude them.
@@ -468,6 +501,8 @@ Apps Script cannot answer a preflight) shaped as
 | `deleteExpense` | `{ id }` | the id |
 | `setPeople` | `{ people: [names] }` | the names |
 | `setRate` | `{ currency, rate_to_aud }` | all rates |
+| `addCurrency` | `{ currency }` | all rates — fails if no live rate exists |
+| `removeCurrency` | `{ currency }` | all rates |
 | `clearOverride` | `{ currency }` | all rates |
 | `refreshRates` | — | all rates |
 | `addProject` / `updateProject` | project object | the saved project |
