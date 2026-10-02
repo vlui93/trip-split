@@ -57,7 +57,8 @@ one, see below).
 `setup()` creates the tabs, a starting project and a starting currency (AUD),
 and generates an API token. The token is printed in the execution log, and
 `showToken()` prints it again. Re-running `setup()` is safe; it also migrates
-older Sheets.
+older Sheets. If you update `Code.gs` and forget to re-run it, any tab or column
+the new code needs is created on the next sync.
 
 **Already made a standalone script?** Run `useSheet('<sheet id or URL>')` once,
 then `setup()`.
@@ -201,8 +202,21 @@ back online or on a VPN. Fetching new rates and seeing other people's changes
 both need a connection.
 
 **Writes are idempotent.** Saving the same id twice updates the existing row
-instead of adding another. A save that reached the Sheet but lost its reply can
-therefore be retried safely.
+instead of adding another. Editing or deleting something another phone has
+already deleted also succeeds. So a save that reached the Sheet but lost its
+reply can be retried safely.
+
+**One rejected change never blocks the rest.** If the backend turns down a
+change, the phone keeps it, marks it, and carries on delivering everything
+queued after it. The home screen shows what is waiting, with **Try again** and
+**Discard**. Waiting changes stay visible on the phone after it syncs, because
+they are layered back on top of the Sheet's copy. Going offline part-way through
+a sync loses nothing.
+
+**Dates use the spreadsheet's timezone.** Sheets stores a typed date at midnight
+in the spreadsheet's timezone, and the Apps Script project has its own
+timezone setting, which can differ. Dates are always read and written in the
+spreadsheet's timezone, so they never shift by a day.
 
 **Only the backend creates recurring occurrences.** It adds whatever is due on
 every sync, under the script lock, using deterministic ids
@@ -260,6 +274,12 @@ no rows.
   function. Select `setup` and run it again.
 - **"Backend returned non-JSON".** The deployment's access is not set to
   *Anyone*.
+- **"The Sheet's script is older than this app."** The app needs a newer
+  backend than the one deployed. Repaste `Code.gs`, then **Deploy → Manage
+  deployments → edit → New version**, and tap **Try again** on the phone.
+  Changes made in the meantime are kept on the phone.
+- **"N changes couldn't sync."** The message under it gives the reason. **Try
+  again** retries them; **Discard** drops them from that phone.
 - **The home-screen icon doesn't change.** iOS caches it by URL, and deleting
   the home-screen item does not clear that cache. The icon filenames carry a
   version for this reason: bump `VERSION` in `mkicon.py`, run it, then reload

@@ -23,6 +23,10 @@ var SHEET_RECURRING   = 'Recurring';
 // so currencies are added from the app without touching this file.
 var DEFAULT_CURRENCIES = ['AUD'];
 
+// Bump when the app starts relying on something new here. The app compares it and
+// says "redeploy" in plain words instead of failing on an unknown action.
+var API_VERSION = 4;
+
 /** Every currency the sheet knows about. AUD is always first and always present. */
 function CURRENCIES() {
   var list = readRows(SHEET_RATES)
@@ -277,9 +281,30 @@ function json(obj) {
  * Sheet helpers
  * ------------------------------------------------------------------ */
 
+/**
+ * A tab the code expects but the Sheet lacks (new code deployed without
+ * re-running setup()) used to fail every request, including plain syncs. Create
+ * it, and fill in any header cells an older Sheet is missing, once per run.
+ */
+var CHECKED_TABS = {};
 function sheet(name) {
-  var sh = book().getSheetByName(name);
-  if (!sh) throw new Error('Missing tab "' + name + '" — run setup() in the script editor.');
+  var ss = book();
+  var sh = ss.getSheetByName(name);
+  if (!sh) {
+    if (!HEADERS[name]) throw new Error('Missing tab "' + name + '".');
+    sh = ss.insertSheet(name);
+  }
+  if (HEADERS[name] && !CHECKED_TABS[name]) {
+    var hdr = HEADERS[name];
+    var need = hdr.length - sh.getMaxColumns();
+    if (need > 0) sh.insertColumnsAfter(sh.getMaxColumns(), need);
+    var cur = sh.getRange(1, 1, 1, hdr.length).getValues()[0];
+    if (hdr.some(function (h, i) { return String(cur[i]) !== h; })) {
+      sh.getRange(1, 1, 1, hdr.length).setValues([hdr]).setFontWeight('bold');
+      sh.setFrozenRows(1);
+    }
+    CHECKED_TABS[name] = true;
+  }
   return sh;
 }
 
@@ -309,9 +334,22 @@ function findRowById(name, id) {
   return -1;
 }
 
+/**
+ * Sheets turns a typed '2030-01-15' into a date at midnight in the spreadsheet's
+ * timezone. Formatting it back in the script's timezone — a separate setting that
+ * often defaults elsewhere — moved every date a day earlier when the Sheet is
+ * ahead (Sydney is). Read and write in the spreadsheet's own timezone.
+ */
+var SHEET_TZ = null;
+function tz() {
+  if (!SHEET_TZ) {
+    try { SHEET_TZ = book().getSpreadsheetTimeZone(); } catch (e) {}
+    if (!SHEET_TZ) SHEET_TZ = Session.getScriptTimeZone();
+  }
+  return SHEET_TZ;
+}
 function ymd(d) {
-  return Utilities.formatDate(d instanceof Date ? d : new Date(d),
-    Session.getScriptTimeZone(), 'yyyy-MM-dd');
+  return Utilities.formatDate(d instanceof Date ? d : new Date(d), tz(), 'yyyy-MM-dd');
 }
 
 /* ------------------------------------------------------------------ *
@@ -322,6 +360,7 @@ function bootstrap(forceRates) {
   var rates = refreshRates(!!forceRates);
   materializeRecurring(rates);
   return {
+    apiVersion:  API_VERSION,
     recurring:   getRecurring(),
     projects:    getProjects(),
     people:      getPeople(),
@@ -427,18 +466,17 @@ function addProject(p) {
 function updateProject(p) {
   if (!p.id) throw new Error('updateProject needs an id');
   var r = findRowById(SHEET_PROJECTS, p.id);
-  if (r < 0) throw new Error('Project not found: ' + p.id);
   var row = projectRow(p);
-  sheet(SHEET_PROJECTS).getRange(r, 1, 1, row.length).setValues([row]);
+  if (r < 0) sheet(SHEET_PROJECTS).appendRow(row);          // upsert
+  else sheet(SHEET_PROJECTS).getRange(r, 1, 1, row.length).setValues([row]);
   return getProjects().filter(function (x) { return x.id === p.id; })[0];
 }
 
 /** Deleting a project takes its expenses and settlements with it. */
 function deleteProject(id) {
-  var all = getProjects();
-  if (all.length < 2) throw new Error('Keep at least one project.');
   var r = findRowById(SHEET_PROJECTS, id);
-  if (r < 0) throw new Error('Project not found: ' + id);
+  if (r < 0) return id;                    // already gone: nothing to protect
+  if (getProjects().length < 2) throw new Error('Keep at least one project.');
 
   // Recurring rules go too, or they would keep generating into a deleted project.
   [SHEET_EXPENSES, SHEET_SETTLEMENTS, SHEET_RECURRING].forEach(function (name) {
@@ -734,16 +772,14 @@ function addExpense(p) {
 
 function updateExpense(p) {
   if (!p.id) throw new Error('updateExpense needs an id');
-  var r = findRowById(SHEET_EXPENSES, p.id);
-  if (r < 0) throw new Error('Expense not found: ' + p.id);
-  var row = expenseRow(p);
-  sheet(SHEET_EXPENSES).getRange(r, 1, 1, row.length).setValues([row]);
-  return rowToExpense(row);
+  // Editing something another phone deleted (or that hasn't arrived yet) used to
+  // throw and jam that phone's queue. Treat an update as an upsert.
+  return addExpense(p);
 }
 
 function deleteExpense(id) {
   var r = findRowById(SHEET_EXPENSES, id);
-  if (r < 0) throw new Error('Expense not found: ' + id);
+  if (r < 0) return id;                    // already gone: the goal is met
   sheet(SHEET_EXPENSES).deleteRow(r);
   return id;
 }
@@ -771,7 +807,7 @@ function addSettlement(p) {
 
 function deleteSettlement(id) {
   var r = findRowById(SHEET_SETTLEMENTS, id);
-  if (r < 0) throw new Error('Settlement not found: ' + id);
+  if (r < 0) return id;                    // already gone
   sheet(SHEET_SETTLEMENTS).deleteRow(r);
   return id;
 }
@@ -793,7 +829,7 @@ function readRates() {
       currency: cur,
       rate_to_aud: Number(r.rate_to_aud) || 0,
       last_updated: r.last_updated instanceof Date
-        ? Utilities.formatDate(r.last_updated, Session.getScriptTimeZone(), "yyyy-MM-dd'T'HH:mm:ss")
+        ? Utilities.formatDate(r.last_updated, tz(), "yyyy-MM-dd'T'HH:mm:ss")
         : String(r.last_updated || ''),
       is_manual_override: r.is_manual_override === true ||
                           String(r.is_manual_override).toLowerCase() === 'true'
@@ -868,7 +904,7 @@ function refreshRates(force) {
       map[c] = {
         currency: c,
         rate_to_aud: live[c],
-        last_updated: Utilities.formatDate(new Date(), Session.getScriptTimeZone(), "yyyy-MM-dd'T'HH:mm:ss"),
+        last_updated: Utilities.formatDate(new Date(), tz(), "yyyy-MM-dd'T'HH:mm:ss"),
         is_manual_override: false
       };
     });
@@ -952,7 +988,7 @@ function addCurrency(code) {
   }
   sheet(SHEET_RATES).appendRow([
     cur, live[cur],
-    Utilities.formatDate(new Date(), Session.getScriptTimeZone(), "yyyy-MM-dd'T'HH:mm:ss"),
+    Utilities.formatDate(new Date(), tz(), "yyyy-MM-dd'T'HH:mm:ss"),
     false
   ]);
   return refreshRates(false);
@@ -979,7 +1015,7 @@ function setRate(currency, rate) {
   map[cur] = {
     currency: cur,
     rate_to_aud: val,
-    last_updated: Utilities.formatDate(new Date(), Session.getScriptTimeZone(), "yyyy-MM-dd'T'HH:mm:ss"),
+    last_updated: Utilities.formatDate(new Date(), tz(), "yyyy-MM-dd'T'HH:mm:ss"),
     is_manual_override: true
   };
   return writeRates(map);

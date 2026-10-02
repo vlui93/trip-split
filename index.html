@@ -959,6 +959,51 @@ async function call(action, payload, opts){
   return data;
 }
 
+/** Re-apply queued changes to a fresh copy from the Sheet. */
+function replayQueue(){
+  const upsert = (list, item) => { const i = list.findIndex(x => String(x.id) === String(item.id));
+    if (i >= 0) list[i] = item; else list.push(item); return list; };
+  const drop = (list, id) => list.filter(x => String(x.id) !== String(id));
+  S.expenses = S.expenses || []; S.settlements = S.settlements || [];
+  S.recurring = S.recurring || []; S.projects = S.projects || [];
+
+  QUEUE.forEach(({ action:a, payload:p }) => {
+    if (!p) return;
+    if (a === 'addExpense' || a === 'updateExpense') upsert(S.expenses, p);
+    else if (a === 'deleteExpense') S.expenses = drop(S.expenses, p.id);
+    else if (a === 'addSettlement') upsert(S.settlements, p);
+    else if (a === 'deleteSettlement') S.settlements = drop(S.settlements, p.id);
+    else if (a === 'addRecurring' || a === 'updateRecurring') upsert(S.recurring, p);
+    else if (a === 'deleteRecurring') S.recurring = drop(S.recurring, p.id);
+    else if (a === 'addProject' || a === 'updateProject') upsert(S.projects, p);
+    else if (a === 'deleteProject'){
+      S.projects = drop(S.projects, p.id);
+      S.expenses = S.expenses.filter(x => x.project_id !== p.id);
+      S.settlements = S.settlements.filter(x => x.project_id !== p.id);
+      S.recurring = S.recurring.filter(x => x.project_id !== p.id);
+    }
+    else if (a === 'setPeople' && Array.isArray(p.people)) S.people = p.people.slice();
+    else if (a === 'setRate'){
+      S.rates = (S.rates || []).map(r => r.currency === p.currency
+        ? Object.assign({}, r, { rate_to_aud:p.rate_to_aud, is_manual_override:true }) : r);
+    }
+    else if (a === 'clearOverride'){
+      S.rates = (S.rates || []).map(r => r.currency === p.currency ? Object.assign({}, r, { is_manual_override:false }) : r);
+    }
+  });
+}
+
+function retryFailed(){ QUEUE.forEach(j => { delete j.err; }); save(K_QUEUE, QUEUE); sync(); }
+function discardFailed(){
+  const failed = QUEUE.filter(j => j.err);
+  if (!failed.length) return;
+  if (!confirm(`Discard ${failed.length} change${failed.length>1?'s':''} that couldn't sync?\n\n`
+             + `They'll be removed from this phone and never reach the Sheet.`)) return;
+  QUEUE = QUEUE.filter(j => !j.err);
+  save(K_QUEUE, QUEUE);
+  sync();
+}
+
 function enqueue(action, payload){
   QUEUE.push({ qid:'q'+Date.now()+Math.random().toString(36).slice(2,6), action, payload });
   save(K_QUEUE, QUEUE);
@@ -968,18 +1013,53 @@ function enqueue(action, payload){
 
 function persist(){ save(K_STATE, S); }
 
+// The backend version this app needs. Older backends get a plain "redeploy" message.
+const API_NEEDED = 4;
+let BACKEND_OLD = false;
+
+function friendlyError(msg){
+  msg = String(msg || '');
+  if (/Unknown action/i.test(msg))
+    return "The Sheet's script is out of date. Repaste Code.gs, then Deploy → Manage deployments → New version.";
+  if (/Missing tab/i.test(msg))
+    return 'The Sheet is missing a tab. Run setup() in the script editor.';
+  return msg;
+}
+
 async function sync(force){
   if (syncing || !CFG || !CFG.url) return;
   syncing = true; lastSyncErr = ''; renderSync();
   try {
-    while (QUEUE.length){
-      const job = QUEUE[0];
-      await call(job.action, job.payload);
-      QUEUE.shift(); save(K_QUEUE, QUEUE); renderSync();
+    // Push every queued change once. One the backend rejects is kept, marked, and
+    // retried next sync — but it no longer blocks the changes queued after it,
+    // which is what used to freeze a phone's sync for good. Going offline mid-way
+    // stops the round; nothing is lost.
+    const tried = new Set();
+    let job;
+    while ((job = QUEUE.find(j => !tried.has(j.qid)))){
+      tried.add(job.qid);
+      try {
+        await call(job.action, job.payload);
+        QUEUE = QUEUE.filter(j => j.qid !== job.qid);
+      } catch(err){
+        if (err instanceof TypeError) throw err;
+        job.err = friendlyError(err.message);
+        job.tries = (job.tries || 0) + 1;
+      }
+      save(K_QUEUE, QUEUE); renderSync();
     }
+
     const d = await call('bootstrap', {}, { refreshRates: !!force });
+    BACKEND_OLD = !(Number(d.apiVersion) >= API_NEEDED);
     S = { projects:d.projects||[], people:d.people||[], expenses:d.expenses||[], rates:d.rates||[],
-          settlements:d.settlements||[], recurring:d.recurring||[], serverDate:d.serverDate||'' };
+          settlements:d.settlements||[],
+          // An older backend doesn't know about recurring at all: keep this phone's
+          // rules rather than replacing them with nothing.
+          recurring: Array.isArray(d.recurring) ? d.recurring : (S.recurring || []),
+          serverDate:d.serverDate||'' };
+    // Changes still waiting are layered back on top, so the Sheet's copy never
+    // hides something this phone has done but not yet delivered.
+    replayQueue();
     if (!pedDirty()) PED = null;     // keep an in-progress roster edit
     autoPickProject();
     persist();
@@ -1022,6 +1102,22 @@ function renderSync(){
   $('#queueCount') && ($('#queueCount').textContent = q);
   $('#syncIcon') && ($('#syncIcon').style.opacity = syncing ? '.4' : '1');
   if (!el) return;
+  const failed = QUEUE.filter(j => j.err);
+  const old = BACKEND_OLD
+    ? `<div class="banner bad"><span class="dot bad"></span><div><b>The Sheet's script is older than this app.</b>
+       Recurring items and newer features won't sync until you repaste <b>Code.gs</b> and deploy a new version
+       (Deploy → Manage deployments → pencil → New version).</div></div>` : '';
+  if (failed.length){
+    // Don't say "out of date" twice: the failure already says it.
+    const sameReason = failed.every(j => /out of date/.test(j.err || ''));
+    el.innerHTML = (sameReason ? '' : old) + `<div class="banner bad" style="flex-direction:column;gap:8px">
+      <div><b>${failed.length} change${failed.length>1?'s':''} couldn't sync.</b> ${esc(failed[0].err)}
+        ${q > failed.length ? `<br>${q - failed.length} other change${q-failed.length>1?'s are':' is'} still syncing normally.` : ''}</div>
+      <div class="row" style="gap:8px"><button class="btn sm ghost" id="syncRetry">Try again</button>
+        <button class="btn sm ghost" id="syncDiscard">Discard</button></div></div>`;
+    return;
+  }
+  if (old){ el.innerHTML = old; return; }
   if (q && lastSyncErr){
     el.innerHTML = `<div class="banner warn"><span class="dot pend"></span><div><b>${q} change${q>1?'s':''} waiting to sync.</b> ${esc(lastSyncErr)}</div></div>`;
   } else if (q){
@@ -2271,6 +2367,10 @@ function updateRemaining(){
 }
 
 $('#addBtn').addEventListener('click', openAdd);
+document.addEventListener('click', e => {
+  if (e.target.id === 'syncRetry') retryFailed();
+  if (e.target.id === 'syncDiscard') discardFailed();
+});
 document.addEventListener('click', e => { if (e.target.closest('#recurOpen')){ renderRecurList(); openSheet('recurSheet'); } });
 $('#newRxfer').addEventListener('click', openRxfer);
 $('#rxSave').addEventListener('click', saveRxfer);
