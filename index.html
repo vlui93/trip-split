@@ -576,8 +576,14 @@ select{background-image:linear-gradient(45deg,transparent 50%,var(--muted) 50%),
         <input id="pePlaces" type="text" placeholder="Tokyo, Kyoto, Osaka">
       </div>
       <div>
-        <label class="fl">Who's in it</label>
+        <label class="fl" id="peMemLabel">Who's in it</label>
         <div class="chips" id="peMembers"></div>
+        <div id="peMemNote" style="font-size:12.5px;color:var(--muted);margin-top:8px"></div>
+        <div class="row" style="gap:8px;margin-top:10px">
+          <input id="peNewPerson" type="text" class="grow" placeholder="Someone new? Add their name"
+                 autocapitalize="words" autocorrect="off">
+          <button class="btn sm ghost" id="peAddPerson">Add</button>
+        </div>
       </div>
       <button class="btn primary full" id="peSave">Save project</button>
       <button class="btn danger full sm" id="peDelete" style="display:none">Delete project and everything in it</button>
@@ -760,8 +766,26 @@ function setActiveProject(id){
  * point of giving a trip a date range — it picks itself up when you land and
  * hands back to everyday spending when you get home.
  */
+/** Turn any old "everyone" (empty) member list into today's names, once. */
+function fixOpenMembership(){
+  if (!S.people || !S.people.length) return;
+  (S.projects || []).forEach(p => {
+    if (!p.members || !p.members.length){
+      p.members = S.people.slice();
+      enqueue('updateProject', p);
+    }
+  });
+}
+
 function autoPickProject(){
   if (!projects().length) return;
+  if (!activeProject()) setActiveProject(projects()[0].id);
+  // Follow the calendar once a day — on the first open or sync of the day — and
+  // then leave the choice alone. Running it after every sync snatched a project
+  // picked by hand back to the dated one (or a future trip back to General) the
+  // moment anything saved.
+  if (PREFS.autoDay === today()) return;
+  PREFS.autoDay = today(); save(K_PREFS, PREFS);
   const dated = projectForDate(today());
   if (dated){ if (PREFS.pid !== dated.id) setActiveProject(dated.id); return; }
   const cur = activeProject();
@@ -1061,6 +1085,7 @@ async function sync(force){
     // hides something this phone has done but not yet delivered.
     replayQueue();
     if (!pedDirty()) PED = null;     // keep an in-progress roster edit
+    if (!BACKEND_OLD) fixOpenMembership();
     autoPickProject();
     persist();
     renderAll();
@@ -1585,12 +1610,21 @@ function savePeople(){
       }
     });
   }
+  // Someone new joins the project you're in, and nothing else.
+  const added = PED.filter(r => !r.orig).map(r => r.val.trim()).filter(Boolean);
+  const act = activeProject();
+  if (added.length && act){
+    const base = (act.members && act.members.length) ? act.members : names.filter(n => !added.includes(n));
+    act.members = base.concat(added.filter(n => !base.includes(n)));
+    enqueue('updateProject', act);
+  }
   S.people = names;
   enqueue('setPeople', { people: names });
   PED = null;
   persist(); renderAll(); renderMore();
 
-  toast(touched ? `Saved — updated ${touched} record${touched > 1 ? 's' : ''}` : 'People saved');
+  toast(added.length && act ? `${added.join(', ')} added to ${act.name}`
+      : touched ? `Saved — updated ${touched} record${touched > 1 ? 's' : ''}` : 'People saved');
 }
 
 /** How many expenses reference this person at all. */
@@ -1634,7 +1668,10 @@ function renderMore(){
       </div>`).join('')
     + `<button class="btn ghost full sm" id="addPerson" style="margin-bottom:8px">+ Add person</button>
        <button class="btn primary full sm" id="savePeople">Save people</button>
-       ${pedDirty() ? '<button class="btn ghost full sm" id="cancelPeople" style="margin-top:8px">Discard changes</button>' : ''}`;
+       ${pedDirty() ? '<button class="btn ghost full sm" id="cancelPeople" style="margin-top:8px">Discard changes</button>' : ''}
+       <div style="font-size:12.5px;color:var(--muted);margin-top:10px">Someone added here joins
+       <b>${esc((activeProject()||{}).name || 'the current project')}</b> only. To add them elsewhere, open that
+       project's settings.</div>`;
 
   $('#meBox').innerHTML =
     `<label class="fl">Which one is you?</label>
@@ -2187,7 +2224,7 @@ document.addEventListener('click', e => {
   const t = e.target.closest('[data-go],[data-close],[data-ex],[data-city],[data-paid],[data-part],' +
     '[data-st],[data-fc],[data-fp],[data-rate],[data-pay],[data-unsettle],[data-editex],[data-ip],[data-idel],[data-me],[data-prm],'+
     '[data-proj],[data-pedit],[data-pecur],[data-pemem],[data-kind],[data-curpick],[data-curq],[data-curother],'+
-    '[data-rep],[data-rule],[data-rxfrom],[data-rxto],[data-rxfreq]');
+    '[data-rep],[data-rule],[data-rxfrom],[data-rxto],[data-rxfreq],[data-peall]');
   if (!t) return;
   const d = t.dataset;
 
@@ -2233,13 +2270,30 @@ document.addEventListener('click', e => {
     renderProjectEditor();
   }
   else if (d.pemem){
-    if (!PE.members.length) PE.members = S.people.slice();
     const i = PE.members.indexOf(d.pemem);
-    if (i >= 0){ if (PE.members.length > 1) PE.members.splice(i,1); }
-    else PE.members.push(d.pemem);
+    if (i >= 0) PE.members.splice(i,1); else PE.members.push(d.pemem);
+    PE.memTouched = true;
+    renderMemberPicker();
+  }
+  else if (d.peall){
+    // "All" selects everyone who exists now; tapped again it goes back to just you.
+    const pool = pePool();
+    const all = pool.every(n => PE.members.includes(n));
+    PE.members = all ? ((PREFS.me && pool.includes(PREFS.me)) ? [PREFS.me] : []) : pool.slice();
+    PE.memTouched = true;
+    renderMemberPicker();
+  }
+  else if (d.kind){
+    PE.kind = d.kind;
+    // A new trip starts with just you; a new ongoing project with everyone —
+    // unless you've already picked people yourself.
+    if (!PE.id && !PE.memTouched){
+      PE.members = d.kind === 'dated'
+        ? ((PREFS.me && pePool().includes(PREFS.me)) ? [PREFS.me] : [])
+        : pePool().slice();
+    }
     renderProjectEditor();
   }
-  else if (d.kind){ PE.kind = d.kind; renderProjectEditor(); }
   else if (d.rate) { openRate(d.rate); }
   else if (d.pay !== undefined && t.hasAttribute('data-pay')){ openPay(Number(d.pay)); }
   else if (d.unsettle){ unsettle(d.unsettle); }
@@ -2640,6 +2694,8 @@ function renderProjectHeader(){
   if (p.cities && p.cities.length) bits.push(p.cities.length > 2 ? p.cities.length + ' places' : p.cities.join(' · '));
   const cur = pCurrencies();
   if (cur.length > 1) bits.push(cur.join('/'));
+  const n = pPeople().length;
+  bits.push(n + (n === 1 ? ' person' : ' people'));
   $('#projMeta').textContent = bits.join(' · ');
 }
 
@@ -2667,6 +2723,14 @@ function openProjectEditor(id){
   PE = p ? JSON.parse(JSON.stringify(p))
          : { id:null, name:'', start_date:'', end_date:'', currencies:['AUD'], cities:[], members:[], archived:false };
   PE.kind = (PE.start_date && PE.end_date) ? 'dated' : 'open';
+  // Membership is always a fixed list of names. (An old empty list meant
+  // "everyone, including people added later", which let trip friends leak into
+  // household projects and the reverse; it is read as today's roster.)
+  PE.memTouched = false;
+  PE.newPeople = [];
+  PE.members = (PE.members && PE.members.length) ? PE.members.slice() : (p ? S.people.slice() : S.people.slice());
+  PE.origMembers = p ? PE.members.slice() : [];
+  $('#peNewPerson').value = '';
   $('#peTitle').textContent = p ? 'Edit project' : 'New project';
   $('#peDelete').style.display = p && projects().length > 1 ? '' : 'none';
   renderProjectEditor();
@@ -2685,11 +2749,41 @@ function renderProjectEditor(){
   $('#peCur').innerHTML = CURS().map(c =>
     `<button class="chip ${PE.currencies.includes(c)?'on':''}" data-pecur="${c}">${c}</button>`).join('');
 
-  $('#peMembers').innerHTML = S.people.map(n => {
-    const on = !PE.members.length || PE.members.includes(n);
-    return `<button class="chip ${on?'on':''}" data-pemem="${esc(n)}">${esc(n)}</button>`;
-  }).join('') + `<div style="font-size:12.5px;color:var(--muted);margin-top:8px;width:100%">
-      Everyone is in by default. Tap to leave someone out of this project.</div>`;
+  renderMemberPicker();
+}
+
+/** All names this editor can offer: the roster plus anyone added here but not saved yet. */
+function pePool(){ return S.people.concat(PE.newPeople.filter(n => !S.people.includes(n))); }
+
+function renderMemberPicker(){
+  const pool = pePool();
+  const picked = PE.members.filter(n => pool.includes(n));
+  const all = picked.length === pool.length && pool.length > 0;
+  $('#peMemLabel').textContent = PE.kind === 'dated' ? "Who's going?" : "Who's in it?";
+  $('#peMembers').innerHTML =
+      `<button class="chip ${all?'on':''}" data-peall="1">All</button>`
+    + pool.map(n => `<button class="chip ${picked.includes(n)?'on':''}" data-pemem="${esc(n)}">${esc(n)}${
+        PE.newPeople.includes(n) ? ' <small>new</small>' : ''}</button>`).join('');
+  $('#peMemNote').textContent = `${picked.length} ${picked.length === 1 ? 'person' : 'people'} · only they are `
+    + `offered on this project's expenses. Someone you add here joins this project only.`;
+}
+
+function addPersonHere(){
+  const name = $('#peNewPerson').value.trim().replace(/\s+/g, ' ');
+  if (!name){ toast('Type a name first'); return; }
+  const taken = pePool().some(n => n.toLowerCase() === name.toLowerCase());
+  if (taken){
+    // Already exists: just make sure they are in this project.
+    const real = pePool().find(n => n.toLowerCase() === name.toLowerCase());
+    if (!PE.members.includes(real)) PE.members.push(real);
+    $('#peNewPerson').value = ''; PE.memTouched = true; renderMemberPicker();
+    toast(real + ' is in'); return;
+  }
+  PE.newPeople.push(name);
+  PE.members.push(name);
+  PE.memTouched = true;
+  $('#peNewPerson').value = '';
+  renderMemberPicker();
 }
 
 function saveProject(){
@@ -2716,8 +2810,26 @@ function saveProject(){
       toast(`"${other.name}" is already the ongoing one — this won't auto-open`);
     }
   }
-  // Empty means everyone; storing the full list would freeze the roster.
-  if (PE.members.length === S.people.length) PE.members = [];
+  const members = PE.members.filter(n => pePool().includes(n));
+  if (!members.length){ toast('Pick at least one person'); return; }
+
+  if (PE.id){
+    const nowIn = members;
+    const dropped = PE.origMembers.filter(n => !nowIn.includes(n));
+    const withHistory = dropped.map(n => [n, (S.expenses||[]).filter(e => e.project_id === PE.id &&
+      (e.paid_by === n || ((e.split_detail||{}).participants||[]).includes(n) ||
+       Object.keys((e.split_detail||{}).shares||{}).includes(n) ||
+       ((e.items||{}).items||[]).some(i => (i.people||[]).includes(n)))).length]).filter(x => x[1]);
+    if (withHistory.length && !confirm(withHistory.map(([n,c]) => `${n} is on ${c} expense${c>1?'s':''} here.`).join('\n')
+        + `\n\nThey'll stay on those, and their balance still shows, but they won't be offered for new expenses. Continue?`)) return;
+  }
+
+  // People added in this editor join the roster now.
+  if (PE.newPeople.length){
+    S.people = S.people.concat(PE.newPeople.filter(n => !S.people.includes(n)));
+    enqueue('setPeople', { people: S.people });
+  }
+  PE.members = members;
 
   const rec = { id:PE.id, name:PE.name, start_date:PE.start_date, end_date:PE.end_date,
                 currencies:PE.currencies, cities:PE.cities, members:PE.members, archived:false };
@@ -2755,6 +2867,8 @@ function deleteProjectLocal(){
 $('#projBtn').addEventListener('click', () => { renderProjectList(); openSheet('projSheet'); });
 $('#newProj').addEventListener('click', () => openProjectEditor(null));
 $('#peSave').addEventListener('click', saveProject);
+$('#peAddPerson').addEventListener('click', addPersonHere);
+$('#peNewPerson').addEventListener('keydown', e => { if (e.key === 'Enter'){ e.preventDefault(); addPersonHere(); } });
 $('#peDelete').addEventListener('click', deleteProjectLocal);
 
 /* ============================================================

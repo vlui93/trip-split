@@ -111,12 +111,25 @@ A project holds its own expenses, balances, settle-up, recurring items and
 members. Tap the title on the home screen to switch projects, edit one or add a
 new one. A project can have:
 
-- **Dates or none.** While today falls inside a project's dates, that project
-  opens by default. Outside them, the app returns to the ongoing project.
+- **Dates or none.** On the first open of each day, the app switches to the
+  project whose dates include today, or back to the ongoing project once a trip
+  has ended. A project you pick by hand stays open for the rest of that day.
   Overlapping dates trigger a warning.
 - **Currencies.** A project with only AUD hides all the conversion controls.
 - **Places.** Free text, optional. Tapping one suggests its currency.
-- **Members.** Everyone by default. Tap someone out to leave them off.
+- **Members.** A fixed list of people, shown as a count in the header. A new
+  trip starts with just you, so you tick who's going. A new ongoing project
+  starts with everyone who exists at the time. **All** selects everyone
+  currently on the roster.
+
+Only a project's members are offered as payers and splitters on its expenses.
+A person you add joins only the project you add them in: either the one whose
+settings you are editing, or the current project when you add them under
+**More → People**. A trip companion therefore never shows up in household
+expenses, and a new housemate never shows up on a past trip.
+
+Removing someone who already appears on a project's expenses shows a warning
+first. They stay on those expenses, and their balance still shows.
 
 Deleting a project deletes its expenses, settlements and recurring rules.
 
