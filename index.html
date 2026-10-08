@@ -333,6 +333,8 @@ select{background-image:linear-gradient(45deg,transparent 50%,var(--muted) 50%),
     <div class="row between"><span style="font-size:14px;color:var(--muted)">Backend</span><span class="tag mono ellip" id="cfgUrlShown" style="max-width:60%">—</span></div>
     <div class="row between"><span style="font-size:14px;color:var(--muted)">Unsynced changes</span><span class="tag mono" id="queueCount">0</span></div>
     <div class="row between"><span style="font-size:14px;color:var(--muted)">Receipt scanning</span><span class="tag" id="aiWho">off</span></div>
+    <div class="row between"><span style="font-size:14px;color:var(--muted)">Offline receipt reader</span><span class="tag" id="ocrState">…</span></div>
+    <button class="btn ghost full sm" id="ocrGet" style="display:none">Download offline reader (10 MB)</button>
     <button class="btn ghost full sm" id="forceSync">Sync now</button>
     <button class="btn danger full sm" id="cfgClear">Disconnect this device</button>
   </div>
@@ -1691,6 +1693,7 @@ function renderMore(){
                     : 'off';
     who.className = 'tag ' + (AI_WHO ? 'live' : '');
   }
+  renderOcrRow();
 }
 
 function renderAll(){ renderProjectHeader(); renderHome(); renderRecurCard(); renderSync();
@@ -2502,9 +2505,14 @@ window.addEventListener('scroll', () => {
 
 let AI_ON = false, AI_WHO = '';
 
+// Scanning always shows — with no AI it reads the receipt on the phone.
+// Describing needs the AI, so it only shows when that's reachable.
 function showAiBar(){
   const bar = $('#aiBar');
-  if (bar) bar.style.display = AI_ON ? 'grid' : 'none';
+  if (!bar) return;
+  bar.style.display = 'grid';
+  bar.style.gridTemplateColumns = AI_ON ? '' : '1fr';
+  $('#btnSay').style.display = AI_ON ? '' : 'none';
 }
 
 async function checkAi(){
@@ -2613,19 +2621,28 @@ function renderAiNote(){
 
 async function runScan(file){
   closeSheet('scanSheet');
+  if (!AI_ON || !navigator.onLine) return runScanOffline(file);
   busy(true, 'Reading your receipt…', 'Usually 10–20 seconds');
   try {
     const image = await downscale(file, 1568);
-    const d = await call('parseReceipt', {
-      image, mediaType: 'image/jpeg',
-      city: F.city, currency: F.cur,
-      defaultPayer: F.paid_by,
-      cities: pCities(), currencies: pCurrencies(),
-      hint: $('#scanHint').value.trim()
-    });
+    // Behind the Great Firewall a Google request can hang rather than fail, so
+    // give up after 45s and treat it like being offline.
+    const d = await Promise.race([
+      call('parseReceipt', {
+        image, mediaType: 'image/jpeg',
+        city: F.city, currency: F.cur,
+        defaultPayer: F.paid_by,
+        cities: pCities(), currencies: pCurrencies(),
+        hint: $('#scanHint').value.trim()
+      }),
+      new Promise((_, reject) => setTimeout(() => reject(new TypeError('timed out')), 45000))
+    ]);
     applyDraft(d.draft);
     toast('Receipt read — check it before saving');
   } catch(err){
+    busy(false);
+    // Google unreachable mid-trip: fall back to reading it here rather than failing.
+    if (err instanceof TypeError){ AI_ON = false; showAiBar(); return runScanOffline(file, "Can't reach Google — reading on this phone"); }
     toast(aiError(err));
   } finally {
     busy(false);
@@ -2656,9 +2673,254 @@ function aiError(err){
   return err.message || String(err);
 }
 
+/* ============================================================
+   Offline receipt reading
+
+   When Google can't be reached (mainland China, no signal) or AI is off,
+   the photo is read on the phone with Tesseract and the text is turned
+   into a draft by plain pattern matching. It can find the total, the line
+   items and the service charge; it can't know who had what, so every item
+   starts shared by everyone and you untick people.
+
+   The engine and language data (~10 MB) live in ocr/ on this site. The
+   service worker keeps them cached once downloaded, so this works with no
+   connection at all.
+   ============================================================ */
+
+/* ocr-parse:start — pure functions, exercised by tests/parse-receipt.test.mjs */
+
+const OCR_RX = {
+  sub:   /sub\s*-?\s*total|小\s*[計计]/i,
+  total: /total|amount\s*due|balance\s*due|grand|[合總总]\s*[計计]|[總总]\s*[額额]|[應应實实]\s*[付收]|[消]\s*[費费]\s*金\s*[額额]|^\s*net\b/i,
+  due:   /grand|amount\s*due|balance\s*due|net\s*total|[應应實实]\s*[付收]/i,
+  extra: /serv|svc|charge|[服]\s*[務务]\s*[費费]|加一|tax|gst|vat|\btips?\b|小\s*[費费]|[稅税]/i,
+  adj:   /discount|\bdisc\b|折扣|[優优]\s*惠|[減减]|coupon|rounding|[尾]\s*[數数]|抹\s*零/i,
+  skip:  /change|找\s*[零續续贖赎]|cash|[現现]\s*金|card|visa|master|amex|union\s*pay|[銀银]\s*[聯联]|ali\s*pay|支\s*付\s*[寶宝]|we\s*chat|微\s*信|octopus|八\s*[達达]\s*通|tender|received|\btel\b|phone|[電电]\s*[話话]|fax|[發发]\s*票|invoice|table|[檯台桌]\s*[號号]?|人\s*[數数]|guest|pax|date|日\s*期|time|[時时]\s*[間间]|order|[單单]\s*[號号]|收\s*[銀银]|cashier|staff|receipt\s*no|qty|[數数]\s*量/i
+};
+
+/** Full-width → ASCII, and drop the spaces Tesseract puts between CJK characters. */
+function normOcrLine(s){
+  return String(s)
+    .replace(/[！-～]/g, c => String.fromCharCode(c.charCodeAt(0) - 0xFEE0))
+    .replace(/[　\t]/g, ' ')
+    .replace(/([㐀-鿿])\s+(?=[㐀-鿿])/g, '$1')
+    .replace(/[|]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+/** The amount at the end of a line, or null. Tolerates "38. 00", "38,00", "1,234.50", "$38", "38.00 T". */
+function lineAmount(line){
+  // m[1] is the character before the number (kept in the label); no lookbehind, for older iOS.
+  const m = line.match(/(^|[^\d.,])(-)?\s*(?:HK\$|MOP\$?|RMB|CNY|HKD|A\$|\$|¥|元)?\s*(\d{1,3}(?:,\d{3})+|\d{1,7})(?:\s?[.,]\s?(\d{1,2}))?\s*(?:元|HKD|MOP|RMB|[A-Za-z*]{1,2})?\s*$/);
+  if (!m) return null;
+  const v = Number(m[3].replace(/,/g, '') + (m[4] ? '.' + m[4] : ''));
+  if (!isFinite(v)) return null;
+  return { value: m[2] ? -v : v, label: (line.slice(0, m.index) + m[1]).trim() };
+}
+
+/** Strip quantities, unit prices and codes from the end/start of a label. */
+function cleanLabel(label){
+  return label
+    .replace(/^\d+\s*[xX×*@]\s*/, '')
+    .replace(/[\s\d.,@xX×*$¥]+$/, '')
+    .replace(/^[\d.\-#*\s]+(?=\D)/, '')
+    .trim();
+}
+const hasWords = s => /[A-Za-z]{2,}|[㐀-鿿]/.test(s);
+
+function receiptDate(lines){
+  for (const l of lines){
+    let m = l.match(/(20\d{2})\s*[-/.年]\s*(\d{1,2})\s*[-/.月]\s*(\d{1,2})/);
+    let y, mo, d;
+    if (m){ y = +m[1]; mo = +m[2]; d = +m[3]; }
+    else if ((m = l.match(/\b(\d{1,2})[-/.](\d{1,2})[-/.](20\d{2})\b/))){
+      y = +m[3]; d = +m[1]; mo = +m[2];
+      if (mo > 12 && d <= 12){ const t = d; d = mo; mo = t; }   // US-style m/d/y
+    }
+    if (y && mo >= 1 && mo <= 12 && d >= 1 && d <= 31)
+      return y + '-' + String(mo).padStart(2, '0') + '-' + String(d).padStart(2, '0');
+  }
+  return '';
+}
+
+/**
+ * Turn OCR text into the same draft shape the AI path returns.
+ * ctx: { people, currency, city, defaultPayer }
+ */
+function parseReceiptText(text, ctx){
+  const lines = String(text || '').split(/\r?\n/).map(normOcrLine).filter(Boolean);
+  const rows = lines.map((line, i) => {
+    const a = lineAmount(line);
+    if (!a) return { i, line, kind: 'text' };
+    const raw = a.label;
+    const kind = /\d{1,2}:\d{2}/.test(line) || receiptDate([line]) ? 'skip'
+               : OCR_RX.sub.test(raw)   ? 'sub'
+               : OCR_RX.total.test(raw) ? 'total'
+               : OCR_RX.adj.test(raw)   ? 'adj'
+               : OCR_RX.extra.test(raw) ? 'extra'
+               : OCR_RX.skip.test(raw)  ? 'skip'
+               : 'item';
+    return { i, line, kind, value: a.value, label: cleanLabel(raw) };
+  });
+
+  // What was actually paid (实付, amount due, grand total) wins over a plain
+  // 合计 / total, which on mainland receipts comes before the discount.
+  // Otherwise take the largest total line; payment and change lines are already skipped.
+  const totals = rows.filter(r => r.kind === 'total' && r.value > 0);
+  const due = totals.filter(r => OCR_RX.due.test(r.label));
+  const totalRow = due.length ? due[due.length - 1]
+                 : totals.reduce((b, r) => (!b || r.value >= b.value) ? r : b, null);
+  const subRow = rows.find(r => r.kind === 'sub' && r.value > 0) || null;
+  const firstStop = rows.find(r => r.kind === 'sub' || r.kind === 'total');
+  const endItems = firstStop ? firstStop.i : Infinity;
+  const endExtra = totalRow ? totalRow.i : Infinity;
+
+  const items = rows.filter(r => r.kind === 'item' && r.i < endItems && r.value > 0 && hasWords(r.label))
+                    .map(r => ({ name: r.label.slice(0, 40), amount: Math.round(r.value * 100) / 100 }));
+  let extra = rows.filter(r => (r.kind === 'extra' || r.kind === 'adj') && r.i < endExtra)
+                  .reduce((a, r) => a + (r.kind === 'adj' ? -Math.abs(r.value) : r.value), 0);
+  extra = Math.round(extra * 100) / 100;
+
+  const r2 = v => Math.round(v * 100) / 100;
+  const itemsSum = r2(items.reduce((a, it) => a + it.amount, 0));
+  let total = totalRow ? totalRow.value
+            : subRow   ? r2(subRow.value + extra)
+            : items.length ? r2(itemsSum + extra)
+            : 0;
+  const notes = ['Read offline on this phone — check the total and items before saving.'];
+  if (!totalRow) notes.push(total ? 'No total line found, so the amount is added up from the items.'
+                                  : "Couldn't find a total — type it in.");
+
+  const tol = Math.max(0.05, total * 0.005);
+  const near = (a, b) => Math.abs(a - b) <= tol;
+  let itemized = false;
+  if (items.length && total){
+    if (near(itemsSum + extra, total)) itemized = true;
+    else if (subRow && near(itemsSum, subRow.value)){ extra = r2(total - subRow.value); itemized = true; }
+    else if (near(itemsSum, total)){ extra = 0; itemized = true; }
+    else notes.push(`Line items add up to ${itemsSum.toFixed(2)}, not ${total.toFixed(2)}, so it's split equally — switch to Itemized to fix them up.`);
+  }
+
+  const desc = lines.slice(0, 5).find(l => !lineAmount(l) && hasWords(l) && !OCR_RX.skip.test(l) && !OCR_RX.total.test(l));
+  const people = ctx.people || [];
+  return {
+    description: desc ? desc.replace(/[^\p{L}\p{N}&'’.\- ]/gu, '').trim().slice(0, 40) || 'Receipt' : 'Receipt',
+    date: receiptDate(lines),
+    city: ctx.city || '',
+    currency: ctx.currency || '',
+    amount_local: r2(total),
+    paid_by: ctx.defaultPayer,
+    split_type: itemized ? 'itemized' : 'equal',
+    participants: people.slice(),
+    shares: [],
+    items: itemized ? items.map(it => ({ name: it.name, amount: it.amount, people: people.slice() })) : [],
+    extra: itemized ? extra : 0,
+    note: notes.join(' ')
+  };
+}
+
+/* ocr-parse:end */
+
+const OCR_CACHE = 'ocr-7.0.0';                  // keep in step with sw.js
+const OCR_BASE  = new URL('ocr/', location.href).href;
+const OCR_LANGS = { CNY: ['chi_sim', 'eng'], HKD: ['chi_tra', 'eng'], MOP: ['chi_tra', 'eng'], TWD: ['chi_tra', 'eng'] };
+
+function wasmSimd(){
+  try { return WebAssembly.validate(new Uint8Array([0,97,115,109,1,0,0,0,1,5,1,96,0,1,123,3,2,1,0,10,10,1,8,0,65,0,253,15,253,98,11])); }
+  catch(e){ return false; }
+}
+// Pick the core here rather than letting Tesseract feature-detect, so only
+// the two variants in ocr/ are ever requested.
+const ocrCore = () => OCR_BASE + (wasmSimd() ? 'tesseract-core-simd-lstm.wasm.js' : 'tesseract-core-lstm.wasm.js');
+const ocrFiles = () => [OCR_BASE + 'tesseract.min.js', OCR_BASE + 'worker.min.js', ocrCore(),
+  ...['eng', 'chi_sim', 'chi_tra'].map(l => OCR_BASE + 'lang/' + l + '.traineddata.gz')];
+
+async function ocrDownloaded(){
+  try {
+    const c = await caches.open(OCR_CACHE);
+    const hits = await Promise.all(ocrFiles().map(u => c.match(u)));
+    return hits.every(Boolean);
+  } catch(e){ return false; }
+}
+
+async function ocrDownload(onStep){
+  const c = await caches.open(OCR_CACHE);
+  const files = ocrFiles();
+  for (let i = 0; i < files.length; i++){
+    onStep && onStep(i, files.length);
+    if (!(await c.match(files[i]))) await c.add(files[i]);
+  }
+  onStep && onStep(files.length, files.length);
+}
+
+let ocrLib = null;
+function loadOcrLib(){
+  return ocrLib || (ocrLib = new Promise((resolve, reject) => {
+    const s = document.createElement('script');
+    s.src = OCR_BASE + 'tesseract.min.js';
+    s.onload = () => resolve(window.Tesseract);
+    s.onerror = () => { ocrLib = null; s.remove();
+      reject(new Error('The offline reader isn’t on this phone yet — download it in More → Connection while you have signal.')); };
+    document.head.appendChild(s);
+  }));
+}
+
+async function readReceiptOffline(file){
+  const T = await loadOcrLib();
+  const image = 'data:image/jpeg;base64,' + await downscale(file, 2000);
+  const langs = OCR_LANGS[F.cur] || ['eng'];
+  const worker = await T.createWorker(langs, 1, {
+    workerPath: OCR_BASE + 'worker.min.js',
+    corePath: ocrCore(),
+    langPath: OCR_BASE + 'lang',
+    workerBlobURL: false,        // a real same-origin worker, so the service worker serves its files
+    logger: m => {
+      if (m.status === 'recognizing text') $('#busySub').textContent = 'Reading on this phone… ' + Math.round(m.progress * 100) + '%';
+    }
+  });
+  try {
+    const { data } = await worker.recognize(image);
+    return data.text || '';
+  } finally {
+    worker.terminate();
+  }
+}
+
+async function runScanOffline(file, why){
+  busy(true, 'Reading your receipt…', why || 'Reading on this phone');
+  try {
+    const text = await readReceiptOffline(file);
+    const d = parseReceiptText(text, { people: pPeople(), currency: F.cur, city: F.city, defaultPayer: F.paid_by });
+    if ($('#scanHint').value.trim()) d.note += ' Your note wasn’t applied offline — set who had what by hand.';
+    applyDraft(d);
+    toast(d.amount_local ? 'Receipt read offline — check it before saving' : 'Couldn’t read a total — check the photo');
+  } catch(err){
+    toast(err.message || String(err));
+  } finally {
+    busy(false);
+  }
+}
+
+async function renderOcrRow(){
+  const tag = $('#ocrState'), btn = $('#ocrGet');
+  if (!tag) return;
+  if (!('caches' in window)){ tag.textContent = 'unsupported'; btn.style.display = 'none'; return; }
+  const ok = await ocrDownloaded();
+  tag.textContent = ok ? 'ready' : 'not downloaded';
+  tag.className = 'tag ' + (ok ? 'live' : '');
+  btn.style.display = ok ? 'none' : '';
+}
+
+if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch(() => {});
+showAiBar();
+
 $('#btnScan').addEventListener('click', () => {
   $('#scanHint').value = '';
-  $('#scanPrivacy').textContent = AI_WHO === 'gemini'
+  $('#scanPrivacy').textContent = !AI_ON
+    ? 'Read on this phone — nothing is uploaded. Offline reading finds the total, items and service charge; '
+      + 'you choose who had what.'
+    : AI_WHO === 'gemini'
     ? 'The photo is read once and not stored by this app — only the expense it produces is saved. '
       + "It does go to Google's free AI tier, where images may be used to improve their models, so avoid "
       + 'photographing anything you would not want read.'
@@ -2669,6 +2931,20 @@ $('#btnScan').addEventListener('click', () => {
 $('#btnSay').addEventListener('click',  () => { $('#sayText').value  = ''; openSheet('saySheet'); });
 $('#btnPickPhoto').addEventListener('click', () => $('#photoInput').click());
 $('#btnSayGo').addEventListener('click', runSay);
+$('#ocrGet').addEventListener('click', async () => {
+  const btn = $('#ocrGet');
+  btn.disabled = true;
+  try {
+    await ocrDownload((i, n) => { btn.textContent = `Downloading… ${i} of ${n}`; });
+    toast('Offline reader ready — receipts can be read with no signal');
+  } catch(err){
+    toast("Download didn't finish — try again on Wi-Fi");
+  } finally {
+    btn.disabled = false;
+    btn.textContent = 'Download offline reader (10 MB)';
+    renderOcrRow();
+  }
+});
 $('#photoInput').addEventListener('change', e => {
   const f = e.target.files && e.target.files[0];
   e.target.value = '';           // so picking the same file twice still fires
