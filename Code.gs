@@ -1241,7 +1241,7 @@ function claudeCall(system, parts, people, cities, currencies) {
   var body = {
     model: CLAUDE_MODEL,
     max_tokens: 4000,
-    system: draftSystemPrompt(people, city, currency, defaultPayer, todayStr),
+    system: system,
     messages: [{ role: 'user', content: userContent }],
     output_config: {
       // Low effort keeps the round trip inside Apps Script's fetch timeout;

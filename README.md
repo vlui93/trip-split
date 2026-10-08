@@ -206,6 +206,26 @@ the service is overloaded, it retries with backoff before moving to another
 model. Photos are shrunk on the phone to 1568px before upload, sent once, and
 never stored.
 
+#### Offline receipt reading
+
+When Google can't be reached (mainland China, no signal, a request hanging for
+45 seconds) or no key is set, **📷 Scan receipt** reads the photo on the phone
+with [Tesseract.js](https://github.com/naptha/tesseract.js) instead. Nothing is
+uploaded. It picks out the total, line items, service charge and discounts with
+plain pattern matching. Every item starts out shared by everyone, so you untick
+whoever didn't have it. If the items don't add up to the total, it falls back to
+an equal split and says so. The note field ("Sam didn't drink") is only used by
+the AI.
+
+Download it once while you have Wi-Fi: **More → Connection → Download offline
+reader** (about 10 MB). The engine and English / Simplified / Traditional Chinese
+data are kept in `ocr/` on this site, not a CDN, and `sw.js` caches them on the
+phone so they load with no connection. The language is picked by currency: CNY
+reads Simplified, HKD and MOP read Traditional. Expect it to misread some Chinese
+characters; the numbers are what matters.
+
+The parser has its own tests: `node tests/parse-receipt.test.mjs`.
+
 ## Design notes
 
 **Offline and blocked networks.** The UI never waits on the network, so adding
