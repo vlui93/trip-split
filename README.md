@@ -234,6 +234,14 @@ are blocked in some countries, and there the queue simply holds until you are
 back online or on a VPN. Fetching new rates and seeing other people's changes
 both need a connection.
 
+The app itself is kept on the phone too. `sw.js` saves the page, manifest and
+icons on first open. After that, each launch fetches a fresh copy if the site
+answers within 4 seconds and opens the saved one otherwise, so the app still
+opens with no signal or if GitHub Pages is slow or blocked. A new version
+arrives on the next launch that can reach the site. The service worker only
+handles this site's own files; requests to Google and the rate APIs pass
+straight through.
+
 **Writes are idempotent.** Saving the same id twice updates the existing row
 instead of adding another. Editing or deleting something another phone has
 already deleted also succeeds. So a save that reached the Sheet but lost its
