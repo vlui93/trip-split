@@ -96,9 +96,19 @@ on each device and kept in its `localStorage`. Anyone can load the page, but
 without a token they cannot read or write anything.
 
 **The token is the credential.** Treat it like a password. If it leaks, run
-`resetToken()` and reconnect each phone. Everyone holding the token has full
-access to that Sheet, which is the intended model for a small group that trusts
-each other. It is not a permissions system.
+`resetToken()` and reconnect each phone. Everyone holding the main token has
+full access to that Sheet.
+
+**Invite links are the exception.** Each one carries its own token, stored in
+the `Access` tab and tied to one person and the projects you picked. The server
+checks it on every request and sends that phone only those projects, and within
+them only the expenses and settlements that person is part of. Nothing else
+reaches their phone, so it can't be read out of it. They can add, edit and
+delete expenses they're part of and log their own settlements. Every other
+change is refused. Turning a link off (× next to it in Settings) takes effect on
+their next sync. What they can see: the names of everyone on those projects, the
+exchange rates, and the full details of each expense they're in, including other
+people's shares of it. Scanning a receipt on their phone uses your AI key.
 
 Optional AI keys are stored in the script's properties, on Google's side. They
 never reach the phone or this repository.
@@ -168,6 +178,36 @@ The app works out the fewest transfers that clear every balance by matching
 the largest debtor with the largest creditor, so a chain A→B→C collapses to
 A→C. For three or fewer people this is provably minimal. **Mark as settled**
 logs the payment.
+
+### Settling in another currency
+
+Everyone settles in AUD unless you pick another currency next to their name in
+**Settings → People** (or when inviting them). Say an aunt and uncle join part of
+the trip and settle in MYR:
+
+- Everyone on AUD stays in one pool. Balances net against each other and
+  settle-up simplifies them as before.
+- Each debt involving someone on MYR is worked out in MYR, using the exchange
+  rate on the day of the expense, and settled one-to-one. The rate is saved with
+  the expense, so later rate moves don't change it.
+- MYR debts are never netted against AUD ones, so their being there can't change
+  what the AUD group owes each other. The only effect is the fair one: on a
+  dinner for five, everyone's share is a fifth.
+- Settle up shows the AUD transfers first, then the MYR ones. Logging an MYR
+  settlement records the MYR amount.
+
+If two people on two different foreign currencies owe each other, it's settled
+in the currency of the one who's owed.
+
+### Inviting someone
+
+**Settings → Invites → Invite someone.** Pick the person (or add someone new),
+the projects they can see and the currency they settle in. Then send them the
+link privately. Opening it connects their phone. On an iPhone they then tap
+Share → Add to Home Screen, open the app from there, and paste the same link into
+the Connect screen's first box. Home-screen apps don't share storage with Safari,
+which is why the link is needed twice. The link is created on your phone, so it
+works once your phone has synced.
 
 ### Recurring
 
@@ -279,11 +319,12 @@ shows a warning first.
 | Tab | Columns |
 |---|---|
 | `Projects` | id, name, start_date, end_date, currencies, cities, members, archived |
-| `People` | name |
+| `People` | name, currency (blank = AUD) |
 | `Expenses` | id, date, city, description, paid_by, currency, amount_local, amount_aud, split_type, split_detail_json, item_breakdown_json, project_id |
 | `ExchangeRates` | currency, rate_to_aud, last_updated, is_manual_override |
-| `Settlements` | id, from, to, amount_aud, date, note, project_id |
+| `Settlements` | id, from, to, amount_aud, date, note, project_id, currency, amount_local |
 | `Recurring` | id, project_id, kind, frequency, start_date, end_date, generated_through, paused, template_json |
+| `Access` | token, person, project_ids, created, revoked (one row per invite link) |
 
 `rate_to_aud` is AUD per one unit of the currency; the app shows the inverse.
 
@@ -301,10 +342,16 @@ is `{ token, action, payload }`. Every response is either `{ ok: true, … }` or
 | `addSettlement` / `deleteSettlement` | settlement, or `{ id }` |
 | `addProject` / `updateProject` / `deleteProject` | project, or `{ id }` |
 | `addRecurring` / `updateRecurring` / `deleteRecurring` | rule, or `{ id }` |
-| `setPeople` | `{ people: [names] }` |
+| `setPeople` | `{ people: [names], renames: { old: new } }` |
+| `setPersonCurrency` | `{ name, currency }` |
+| `createInvite` / `revokeInvite` | `{ token, person, project_ids }` / `{ token }` |
 | `setRate` / `clearOverride` / `refreshRates` | `{ currency, rate_to_aud }` / `{ currency }` / — |
 | `addCurrency` / `removeCurrency` | `{ currency }` |
 | `aiStatus` / `parseReceipt` / `parseText` | — / `{ image, … }` / `{ text, … }` |
+
+With an invite token, only `bootstrap`, the expense and settlement actions, and
+the AI actions are allowed, and each is limited as described under Security
+model.
 
 The AI actions run outside the script lock, because they take seconds and touch
 no rows.
@@ -332,5 +379,6 @@ no rows.
 |---|---|
 | `index.html` | The whole frontend: markup, styles and logic |
 | `Code.gs` | Apps Script backend |
+| `tests/` | `node tests/<name>.test.mjs`: receipt parsing, the currency ledger, and invite access control (runs `Code.gs` against a fake Sheet in `fake-gas.mjs`) |
 | `manifest.webmanifest` | Web app manifest |
 | `icon-*-v2.png`, `mkicon.py`, `icon.svg` | Home-screen icons and the script that generates them |

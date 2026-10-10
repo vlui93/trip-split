@@ -216,6 +216,7 @@ select{background-image:linear-gradient(45deg,transparent 50%,var(--muted) 50%),
 .ratebox input{min-height:40px;padding:8px 10px;text-align:right;font-weight:700;font-variant-numeric:tabular-nums;flex:1;min-width:0}
 .ratebox .btn{white-space:nowrap}
 .linkbtn{color:var(--accent);font-weight:650;font-size:13.5px;padding:2px 0;text-align:left}
+body.guest .owner-only{display:none !important}
 .aibar{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:12px}
 .aibar button{min-height:50px;border-radius:12px;background:var(--accent-soft);color:var(--accent);font-weight:650;font-size:14.5px;display:flex;align-items:center;justify-content:center;gap:7px;border:1px solid transparent}
 .aibar button:active{transform:scale(.975)}
@@ -240,6 +241,7 @@ select{background-image:linear-gradient(45deg,transparent 50%,var(--muted) 50%),
 <section id="s-setup" class="screen">
   <div class="topbar"><h1>Connect</h1></div>
   <p class="sub">Paste the Web App URL and token from your Apps Script deployment. They are stored only on this device — nothing is committed to the public repo.</p>
+  <p class="sub"><b>Got an invite link?</b> Paste the whole link into the first box and leave the token empty.</p>
   <div class="card stack">
     <div>
       <label class="fl" for="cfgUrl">Apps Script /exec URL</label>
@@ -285,7 +287,7 @@ select{background-image:linear-gradient(45deg,transparent 50%,var(--muted) 50%),
     </div>
   </div>
 
-  <div id="recurCard"></div>
+  <div id="recurCard" class="owner-only"></div>
 
   <div class="section-label">Recent</div>
   <div class="card" id="recent"></div>
@@ -307,7 +309,7 @@ select{background-image:linear-gradient(45deg,transparent 50%,var(--muted) 50%),
   <div class="topbar"><h1>Settle up</h1></div>
   <p class="sub">The fewest transactions that clear every balance. Debts are chained through, so nobody pays a middleman.</p>
   <div class="card" id="transfers"></div>
-  <button class="btn ghost full sm" id="newRxfer" style="margin-bottom:4px">↻ Set up a recurring transfer</button>
+  <button class="btn ghost full sm owner-only" id="newRxfer" style="margin-bottom:4px">↻ Set up a recurring transfer</button>
   <div class="section-label">Settlement log</div>
   <div class="card" id="settleLog"></div>
 </section>
@@ -316,8 +318,11 @@ select{background-image:linear-gradient(45deg,transparent 50%,var(--muted) 50%),
 <section id="s-more" class="screen">
   <div class="topbar"><h1>Settings</h1></div>
 
+  <div id="guestBox" style="display:none"></div>
+
   <div class="section-label" style="margin-top:4px">Exchange rates · per 1 AUD</div>
   <div class="card" id="ratesBox"></div>
+  <div class="owner-only">
   <div class="row" style="gap:8px;margin-bottom:6px">
     <button class="btn ghost grow sm" id="refreshRates">Fetch live rates</button>
     <button class="btn ghost grow sm" id="addCurBtn">+ Add currency</button>
@@ -327,6 +332,13 @@ select{background-image:linear-gradient(45deg,transparent 50%,var(--muted) 50%),
   <div class="section-label">People</div>
   <div class="card stack" id="peopleBox"></div>
   <div class="card" id="meBox"></div>
+
+  <div class="section-label">Invites</div>
+  <div class="card stack" id="inviteBox"></div>
+  <p class="sub">An invite link lets someone use the app on their own phone. They see only the projects you pick,
+    and only the expenses they're part of. They can add and edit their own expenses and log their own
+    settlements, but can't change people, rates or projects. Turning a link off takes effect on their next sync.</p>
+  </div>
 
   <div class="section-label">Connection</div>
   <div class="card stack">
@@ -410,7 +422,7 @@ select{background-image:linear-gradient(45deg,transparent 50%,var(--muted) 50%),
         <label class="fl" for="exDate">Date</label>
         <input id="exDate" type="date">
       </div>
-      <div id="exRepeatWrap">
+      <div id="exRepeatWrap" class="owner-only">
         <label class="fl">Repeat</label>
         <div class="chips" id="exRepeat"></div>
         <div id="exUntilWrap" style="margin-top:10px;display:none">
@@ -476,7 +488,7 @@ select{background-image:linear-gradient(45deg,transparent 50%,var(--muted) 50%),
     <div class="card stack">
       <div id="payWho" style="font-size:16px;font-weight:650"></div>
       <div>
-        <label class="fl" for="payAmt">Amount settled · AUD</label>
+        <label class="fl" for="payAmt" id="payAmtLbl">Amount settled · AUD</label>
         <input id="payAmt" type="text" inputmode="decimal" class="amount-in">
       </div>
       <div>
@@ -532,6 +544,33 @@ select{background-image:linear-gradient(45deg,transparent 50%,var(--muted) 50%),
   </div>
 </div>
 
+<!-- ============ INVITE SHEET ============ -->
+<div class="sheet" id="invSheet">
+  <div class="scrim" data-close="invSheet"></div>
+  <div class="panel">
+    <div class="grab"></div>
+    <div class="sheet-head"><h2>Invite someone</h2><button class="btn sm ghost" data-close="invSheet">Cancel</button></div>
+    <div class="card stack" id="invBody"></div>
+    <button class="btn primary full" id="invCreate">Create invite link</button>
+  </div>
+</div>
+
+<div class="sheet" id="invLinkSheet">
+  <div class="scrim" data-close="invLinkSheet"></div>
+  <div class="panel">
+    <div class="grab"></div>
+    <div class="sheet-head"><h2 id="invLinkTitle">Invite link</h2><button class="btn sm ghost" data-close="invLinkSheet">Done</button></div>
+    <div class="card stack">
+      <div class="mono" id="invLinkText" style="font-size:12.5px;word-break:break-all;user-select:all"></div>
+      <div class="row" style="gap:8px">
+        <button class="btn ghost grow sm" id="invCopy">Copy link</button>
+        <button class="btn primary grow sm" id="invShare">Share…</button>
+      </div>
+    </div>
+    <p class="sub" id="invLinkNote"></p>
+  </div>
+</div>
+
 <!-- ============ PROJECT SWITCHER ============ -->
 <div class="sheet" id="projSheet">
   <div class="scrim" data-close="projSheet"></div>
@@ -539,7 +578,7 @@ select{background-image:linear-gradient(45deg,transparent 50%,var(--muted) 50%),
     <div class="grab"></div>
     <div class="sheet-head"><h2>Projects</h2><button class="btn sm ghost" data-close="projSheet">Close</button></div>
     <div class="card" id="projList"></div>
-    <button class="btn ghost full sm" id="newProj">+ New project</button>
+    <button class="btn ghost full sm owner-only" id="newProj">+ New project</button>
     <p class="sub">A project keeps its own expenses, balances and settle-up. Give one a date range
       and the app switches to it by itself while you're away.</p>
   </div>
@@ -722,10 +761,15 @@ function CURS(){
 const K_CFG='tsplit.cfg', K_STATE='tsplit.state', K_QUEUE='tsplit.queue', K_PREFS='tsplit.prefs';
 
 let CFG   = load(K_CFG,   null);
-let S     = load(K_STATE, { projects:[], people:[], expenses:[], rates:[], settlements:[], recurring:[] });
+const EMPTY_STATE = () => ({ projects:[], people:[], expenses:[], rates:[], settlements:[], recurring:[],
+                             personCur:{}, invites:[], guest:null });
+let S     = load(K_STATE, EMPTY_STATE());
 let QUEUE = load(K_QUEUE, []);
 let PREFS = load(K_PREFS, { lastCity:'', me:'', pid:'' });
 let syncing = false, lastSyncErr = '';
+
+/** On an invite link: { person, project_ids }. The owner's phone: null. */
+const GUEST = () => (S && S.guest) || null;
 
 function load(k, d){ try{ const v=localStorage.getItem(k); return v?JSON.parse(v):d; }catch(e){ return d; } }
 function save(k, v){ try{ localStorage.setItem(k, JSON.stringify(v)); }catch(e){} }
@@ -922,22 +966,101 @@ function sharesOf(ex){
   return allocate(totalC, weights);
 }
 
-/** Net balance per person in AUD cents. Positive = owed money. */
-function balances(){
-  const b = {};
-  pPeople().forEach(n => b[n] = 0);
-  pExpenses().forEach(ex => {
-    if (b[ex.paid_by] === undefined) b[ex.paid_by] = 0;
-    b[ex.paid_by] += cents(ex.amount_aud);
-    const sh = sharesOf(ex);
-    Object.keys(sh).forEach(n => { b[n] = (b[n]||0) - sh[n]; });
+/* ============================================================
+   Who settles in what
+
+   Everyone settles in AUD unless given another currency (Settings → People).
+   AUD people form one pool: their balances net against each other and
+   settle-up chains debts through, as always. Anyone on another currency —
+   say an aunt and uncle in MYR — settles one-to-one instead: each debt
+   involving them is worked out in their currency at the rate on the day of
+   the expense (locked into the expense as split_detail.fx), and never netted
+   against AUD debts. So adding them can't move what the AUD pool owes each
+   other, beyond their fair share of what they joined in on.
+   ============================================================ */
+
+/* ledger:start — pure functions, exercised by tests/ledger.test.mjs */
+const BASE = 'AUD';
+
+/** The currency a debt between debtor and creditor settles in. */
+function pairCur(debtor, creditor, curOf){
+  const a = curOf(debtor), b = curOf(creditor);
+  if (a === b) return a;
+  if (a === BASE) return b;
+  if (b === BASE) return a;
+  return b;                                  // two different foreign currencies: the creditor's
+}
+
+/**
+ * pool:  AUD cents per pool member, positive = owed (as balances() always was).
+ * pairs: one-to-one debts [{ from, to, cur, c }] in that currency's cents.
+ * rateNow(cur) is AUD per unit today; shares(ex) is AUD cents per person.
+ */
+function buildLedger(expenses, settlements, members, curOf, rateNow, shares){
+  const pool = {};
+  members.forEach(n => { if (curOf(n) === BASE) pool[n] = 0; });
+  const net = {};                            // "a\u0001b\u0001cur" with a < b → cents a owes b
+  const owe = (debtor, creditor, cur, c) => {
+    if (!c || debtor === creditor) return;
+    const fwd = debtor < creditor;
+    const k = (fwd ? debtor : creditor) + '\u0001' + (fwd ? creditor : debtor) + '\u0001' + cur;
+    net[k] = (net[k] || 0) + (fwd ? c : -c);
+  };
+  const toPool = (debtor, creditor, c) => {
+    pool[debtor]   = (pool[debtor]   || 0) - c;
+    pool[creditor] = (pool[creditor] || 0) + c;
+  };
+
+  expenses.forEach(ex => {
+    const sh = shares(ex);
+    const fx = (ex.split_detail && ex.split_detail.fx) || {};
+    Object.keys(sh).forEach(n => {
+      if (n === ex.paid_by || !sh[n]) return;
+      const cur = pairCur(n, ex.paid_by, curOf);
+      if (cur === BASE) return toPool(n, ex.paid_by, sh[n]);
+      const r = Number(fx[cur]) || rateNow(cur);
+      if (r > 0) owe(n, ex.paid_by, cur, Math.round(sh[n] / r));
+      else owe(n, ex.paid_by, BASE, sh[n]);  // no rate at all yet: keep it in AUD rather than lose it
+    });
   });
-  pSettlements().forEach(st => {
-    const a = cents(st.amount_aud);
-    b[st.from] = (b[st.from]||0) + a;
-    b[st.to]   = (b[st.to]  ||0) - a;
+
+  settlements.forEach(st => {
+    const cur = pairCur(st.from, st.to, curOf);
+    const aud = Math.round((Number(st.amount_aud) || 0) * 100);
+    if (cur === BASE) return toPool(st.to, st.from, aud);   // paying back is a debt the other way
+    const stCur = st.currency || BASE;
+    if (stCur === cur) owe(st.to, st.from, cur, Math.round((Number(st.amount_local) || 0) * 100));
+    else if (rateNow(cur) > 0) owe(st.to, st.from, cur, Math.round(aud / rateNow(cur)));
+    else owe(st.to, st.from, BASE, aud);    // matches where an expense with no rate put the debt
   });
-  return b;
+
+  const pairs = [];
+  Object.keys(net).forEach(k => {
+    const [a, b, cur] = k.split('\u0001');
+    const c = net[k];
+    if (c > 0) pairs.push({ from: a, to: b, cur, c });
+    else if (c < 0) pairs.push({ from: b, to: a, cur, c: -c });
+  });
+  pairs.sort((x, y) => (x.cur + x.from + x.to).localeCompare(y.cur + y.from + y.to));
+  return { pool, pairs };
+}
+/* ledger:end */
+
+function settleCur(name){ return (S.personCur || {})[name] || BASE; }
+function ledger(){
+  return buildLedger(pExpenses(), pSettlements(), pPeople(), settleCur, rateOf, sharesOf);
+}
+/** Net balance per AUD-pool person in AUD cents. Positive = owed money. */
+function balances(){ return ledger().pool; }
+
+/** Rates for every foreign settle currency on this expense, kept so its debts never drift. */
+function lockFx(ex, prev){
+  const curs = new Set([ex.paid_by].concat(Object.keys(sharesOf(ex))).map(settleCur));
+  curs.delete(BASE);
+  if (!curs.size) return;
+  const fx = {};
+  curs.forEach(c => { const r = (prev && prev[c]) || rateOf(c); if (r > 0) fx[c] = r; });
+  if (Object.keys(fx).length) ex.split_detail.fx = fx;
 }
 
 /**
@@ -985,6 +1108,11 @@ async function call(action, payload, opts){
   return data;
 }
 
+function upsertBy(list, item, key){
+  const i = list.findIndex(x => x[key] === item[key]);
+  if (i >= 0) list[i] = item; else list.push(item);
+}
+
 /** Re-apply queued changes to a fresh copy from the Sheet. */
 function replayQueue(){
   const upsert = (list, item) => { const i = list.findIndex(x => String(x.id) === String(item.id));
@@ -1008,7 +1136,19 @@ function replayQueue(){
       S.settlements = S.settlements.filter(x => x.project_id !== p.id);
       S.recurring = S.recurring.filter(x => x.project_id !== p.id);
     }
-    else if (a === 'setPeople' && Array.isArray(p.people)) S.people = p.people.slice();
+    else if (a === 'setPeople' && Array.isArray(p.people)){
+      S.people = p.people.slice();
+      const pc = S.personCur || {};
+      Object.keys(p.renames || {}).forEach(o => { if (pc[o]){ pc[p.renames[o]] = pc[o]; delete pc[o]; } });
+    }
+    else if (a === 'setPersonCurrency'){
+      S.personCur = S.personCur || {};
+      if (p.currency && p.currency !== BASE) S.personCur[p.name] = p.currency; else delete S.personCur[p.name];
+    }
+    else if (a === 'createInvite') upsertBy(S.invites = S.invites || [], p, 'token');
+    else if (a === 'revokeInvite'){
+      S.invites = (S.invites || []).map(i => i.token === p.token ? Object.assign({}, i, { revoked:true }) : i);
+    }
     else if (a === 'setRate'){
       S.rates = (S.rates || []).map(r => r.currency === p.currency
         ? Object.assign({}, r, { rate_to_aud:p.rate_to_aud, is_manual_override:true }) : r);
@@ -1040,7 +1180,7 @@ function enqueue(action, payload){
 function persist(){ save(K_STATE, S); }
 
 // The backend version this app needs. Older backends get a plain "redeploy" message.
-const API_NEEDED = 4;
+const API_NEEDED = 5;
 let BACKEND_OLD = false;
 
 function friendlyError(msg){
@@ -1050,6 +1190,18 @@ function friendlyError(msg){
   if (/Missing tab/i.test(msg))
     return 'The Sheet is missing a tab. Run setup() in the script editor.';
   return msg;
+}
+
+function applyBootstrap(d){
+  S = { projects:d.projects||[], people:d.people||[], expenses:d.expenses||[], rates:d.rates||[],
+        settlements:d.settlements||[],
+        // An older backend doesn't know about recurring at all: keep this phone's
+        // rules rather than replacing them with nothing.
+        recurring: Array.isArray(d.recurring) ? d.recurring : (S.recurring || []),
+        personCur: d.personCur || {}, invites: d.invites || [], guest: d.guest || null,
+        serverDate:d.serverDate||'' };
+  // On an invite, "you" is whoever the invite is for.
+  if (S.guest && PREFS.me !== S.guest.person){ PREFS.me = S.guest.person; save(K_PREFS, PREFS); }
 }
 
 async function sync(force){
@@ -1075,19 +1227,14 @@ async function sync(force){
       save(K_QUEUE, QUEUE); renderSync();
     }
 
-    const d = await call('bootstrap', {}, { refreshRates: !!force });
+    const d = await call('bootstrap', {}, { refreshRates: !!force && !GUEST() });
     BACKEND_OLD = !(Number(d.apiVersion) >= API_NEEDED);
-    S = { projects:d.projects||[], people:d.people||[], expenses:d.expenses||[], rates:d.rates||[],
-          settlements:d.settlements||[],
-          // An older backend doesn't know about recurring at all: keep this phone's
-          // rules rather than replacing them with nothing.
-          recurring: Array.isArray(d.recurring) ? d.recurring : (S.recurring || []),
-          serverDate:d.serverDate||'' };
+    applyBootstrap(d);
     // Changes still waiting are layered back on top, so the Sheet's copy never
     // hides something this phone has done but not yet delivered.
     replayQueue();
     if (!pedDirty()) PED = null;     // keep an in-progress roster edit
-    if (!BACKEND_OLD) fixOpenMembership();
+    if (!BACKEND_OLD && !GUEST()) fixOpenMembership();
     autoPickProject();
     persist();
     renderAll();
@@ -1156,31 +1303,88 @@ function renderSync(){
   }
 }
 
+const fmtCurC = (c, cur) => cur === BASE ? fmtAudC(c) : fmtCur(money(c), cur);
+
+/** A person's net in each currency: the AUD pool plus every one-to-one debt they're in. */
+function netsOf(name, L){
+  const out = {};
+  if (L.pool[name] !== undefined && L.pool[name] !== 0) out[BASE] = L.pool[name];
+  L.pairs.forEach(p => {
+    if (p.from === name) out[p.cur] = (out[p.cur] || 0) - p.c;
+    if (p.to === name)   out[p.cur] = (out[p.cur] || 0) + p.c;
+  });
+  Object.keys(out).forEach(k => { if (!out[k]) delete out[k]; });
+  return out;
+}
+
+/** Transfers to show: the simplified AUD pool, then one-to-one debts. A guest sees only their own. */
+function transfers(L){
+  const pool = GUEST() ? [] : simplify(L.pool).map(t => Object.assign({ cur: BASE }, t));
+  const pairs = L.pairs.filter(p => !GUEST() || p.from === GUEST().person || p.to === GUEST().person);
+  return pool.concat(pairs);
+}
+
+function balRow(n, v, cur, lbl, extra){
+  const cls = v > 0 ? 'pos' : v < 0 ? 'neg' : 'zero';
+  const isMe = PREFS.me === n;
+  return `<div class="bal">
+    <div class="av"${isMe ? ' style="background:var(--accent);color:var(--accent-ink)"' : ''}>${esc(initials(n))}</div>
+    <div class="grow"><div style="font-weight:650">${esc(n)}${isMe ? ' <span class="tag" style="margin-left:4px">you</span>' : ''}</div>
+      <div style="font-size:12.5px;color:var(--muted)">${esc(lbl)}${extra ? ' · ' + esc(extra) : ''}</div></div>
+    <div class="amt mono ${cls}">${v===0?'—':fmtCurC(Math.abs(v), cur)}</div>
+  </div>`;
+}
+
 function renderHome(){
-  const b = balances();
+  const L = ledger();
+  const g = GUEST();
+  const label = v => v > 0 ? 'is owed' : v < 0 ? 'owes' : 'square';
   const names = pPeople().slice();
-  Object.keys(b).forEach(n => { if (!names.includes(n) && b[n] !== 0) names.push(n); });
-  $('#balances').innerHTML = names.length ? names.map(n => {
-    const v = b[n] || 0;
-    const cls = v > 0 ? 'pos' : v < 0 ? 'neg' : 'zero';
-    const lbl = v > 0 ? 'is owed' : v < 0 ? 'owes' : 'square';
-    const isMe = PREFS.me === n;
-    return `<div class="bal">
-      <div class="av"${isMe ? ' style="background:var(--accent);color:var(--accent-ink)"' : ''}>${esc(initials(n))}</div>
-      <div class="grow"><div style="font-weight:650">${esc(n)}${isMe ? ' <span class="tag" style="margin-left:4px">you</span>' : ''}</div>
-        <div style="font-size:12.5px;color:var(--muted)">${lbl}</div></div>
-      <div class="amt mono ${cls}">${v===0?'—':fmtAudC(Math.abs(v))}</div>
-    </div>`;
-  }).join('') : `<div class="empty">Add people in Settings.</div>`;
+  Object.keys(L.pool).forEach(n => { if (!names.includes(n) && L.pool[n] !== 0) names.push(n); });
 
-  const total = pExpenses().reduce((a,e) => a + cents(e.amount_aud), 0);
-  $('#tripTotal').textContent = fmtAudC(total) + ' spent';
+  let rows;
+  if (g){
+    // A guest's own debts are complete — every expense they're in reaches their phone —
+    // but nobody else's are, so show just theirs, one person at a time.
+    const mine = L.pairs.filter(p => p.from === g.person || p.to === g.person);
+    rows = mine.map(p => {
+      const other = p.from === g.person ? p.to : p.from;
+      const v = p.from === g.person ? -p.c : p.c;
+      return balRow(other, v, p.cur, v > 0 ? 'owes you' : 'you owe', p.cur);
+    });
+    if (L.pool[g.person]) rows.unshift(balRow(g.person, L.pool[g.person], BASE, label(L.pool[g.person]), 'AUD'));
+    rows = rows.join('') || `<div class="empty">You're all square.</div>`;
+  } else {
+    rows = names.map(n => {
+      const nets = netsOf(n, L);
+      const main = settleCur(n);
+      const v = nets[main] || 0;
+      const extra = Object.keys(nets).filter(c => c !== main)
+        .map(c => (nets[c] > 0 ? 'owed ' : 'owes ') + fmtCurC(Math.abs(nets[c]), c)).join(', ');
+      return balRow(n, v, main, label(v) + (main !== BASE ? ` in ${main}` : ''), extra);
+    }).join('') || `<div class="empty">Add people in Settings.</div>`;
+  }
+  $('#balances').innerHTML = rows;
 
-  const tx = simplify(b);
+  if (g){
+    // What their share of everything comes to, in their own currency.
+    const cur = settleCur(g.person);
+    const c = pExpenses().reduce((a, ex) => {
+      const s = sharesOf(ex)[g.person] || 0;
+      const r = cur === BASE ? 1 : (Number(((ex.split_detail||{}).fx||{})[cur]) || rateOf(cur));
+      return a + (r > 0 ? Math.round(s / r) : 0);
+    }, 0);
+    $('#tripTotal').textContent = 'your share ' + fmtCurC(c, cur);
+  } else {
+    const total = pExpenses().reduce((a,e) => a + cents(e.amount_aud), 0);
+    $('#tripTotal').textContent = fmtAudC(total) + ' spent';
+  }
+
+  const tx = transfers(L);
   $('#settleHint').textContent = !tx.length
-    ? 'Everyone is square'
+    ? (g ? 'You’re all square' : 'Everyone is square')
     : tx.length === 1
-      ? `${tx[0].from} → ${tx[0].to} · ${fmtAudC(tx[0].c)}`
+      ? `${tx[0].from} → ${tx[0].to} · ${fmtCurC(tx[0].c, tx[0].cur)}`
       : `${tx.length} transfers clear it`;
 
   const recent = pExpenses().slice().sort(byDateDesc).slice(0,6);
@@ -1258,18 +1462,35 @@ function renderHistory(){
 /* ---------------- render: settle ---------------- */
 
 function renderSettle(){
-  const b = balances();
-  const tx = simplify(b);
-  $('#transfers').innerHTML = tx.length ? tx.map((t,i) => `
+  const L = ledger();
+  const tx = transfers(L);
+  const g = GUEST();
+  const xfer = (t, i) => `
     <div class="xfer">
       <div class="av">${esc(initials(t.from))}</div>
       <div class="grow">
         <div style="font-weight:650">${esc(t.from)} <span class="arrow">→</span> ${esc(t.to)}</div>
-        <div style="font-size:12.5px;color:var(--muted)">transfer ${fmtAudC(t.c)}</div>
+        <div style="font-size:12.5px;color:var(--muted)">transfer ${fmtCurC(t.c, t.cur)}</div>
       </div>
       <button class="btn sm primary" data-pay="${i}">Settle</button>
-    </div>`).join('')
-    : `<div class="empty"><span class="big">✨</span>All square — no transfers needed.</div>`;
+    </div>`;
+  const head = txt => `<div style="font-size:12.5px;font-weight:650;color:var(--muted);margin:2px 0 6px">${esc(txt)}</div>`;
+  const pool = tx.filter(t => t.cur === BASE && !L.pairs.includes(t));
+  const pairs = tx.filter(t => !pool.includes(t));
+  let html = '';
+  if (pool.length && pairs.length) html += head('In AUD, simplified');
+  html += pool.map(t => xfer(t, tx.indexOf(t))).join('');
+  if (pairs.length){
+    if (pool.length) html += '<div class="hr"></div>';
+    const curs = Array.from(new Set(pairs.map(t => t.cur)));
+    html += head(`${curs.join(' / ')} · settled one-to-one`);
+    html += pairs.map(t => xfer(t, tx.indexOf(t))).join('');
+  }
+  if (g && L.pool[g.person]){
+    html += `<div class="banner warn" style="margin-top:8px"><span class="dot pend"></span><div>You settle in AUD with the
+      rest of the group, so ask the organiser who to pay — that part needs everyone's expenses.</div></div>`;
+  }
+  $('#transfers').innerHTML = html || `<div class="empty"><span class="big">✨</span>All square — no transfers needed.</div>`;
   window.__tx = tx;
 
   const log = pSettlements().slice().sort(byDateDesc);
@@ -1281,7 +1502,7 @@ function renderSettle(){
         <div style="font-size:12.5px;color:var(--muted)">${isOccurrence(st.id)?'↻ ':''}${esc(st.date)}${st.note?' · '+esc(st.note):''}</div>
       </div>
       <div style="text-align:right">
-        <div class="mono" style="font-weight:700">${fmtAud(st.amount_aud)}</div>
+        <div class="mono" style="font-weight:700">${st.currency && st.currency !== BASE ? fmtCur(st.amount_local, st.currency) : fmtAud(st.amount_aud)}</div>
         <button class="btn sm ghost" style="margin-top:4px" data-unsettle="${esc(st.id)}">Undo</button>
       </div>
     </div>`).join('')
@@ -1621,7 +1842,11 @@ function savePeople(){
     enqueue('updateProject', act);
   }
   S.people = names;
-  enqueue('setPeople', { people: names });
+  // renames lets the Sheet carry each person's settle currency and invite across.
+  const pc = S.personCur || {};
+  Object.keys(map).forEach(o => { if (pc[o]){ pc[map[o]] = pc[o]; delete pc[o]; } });
+  (S.invites || []).forEach(i => { if (map[i.person]) i.person = map[i.person]; });
+  enqueue('setPeople', { people: names, renames: map });
   PED = null;
   persist(); renderAll(); renderMore();
 
@@ -1666,6 +1891,9 @@ function renderMore(){
         <div class="av">${esc(initials(r.val) || '?')}</div>
         <input class="grow" type="text" data-person="${i}" value="${esc(r.val)}"
                placeholder="Name" autocapitalize="words" autocorrect="off">
+        ${r.orig && CURS().length > 1 ? `<select data-pcur="${esc(r.orig)}" title="Settles in"
+            style="width:auto;min-width:76px;flex:none">${CURS().map(c =>
+            `<option value="${c}"${settleCur(r.orig) === c ? ' selected' : ''}>${c}</option>`).join('')}</select>` : ''}
         <button class="iconbtn" data-prm="${i}" title="Remove"${PED.length < 2 ? ' disabled' : ''}>×</button>
       </div>`).join('')
     + `<button class="btn ghost full sm" id="addPerson" style="margin-bottom:8px">+ Add person</button>
@@ -1673,7 +1901,13 @@ function renderMore(){
        ${pedDirty() ? '<button class="btn ghost full sm" id="cancelPeople" style="margin-top:8px">Discard changes</button>' : ''}
        <div style="font-size:12.5px;color:var(--muted);margin-top:10px">Someone added here joins
        <b>${esc((activeProject()||{}).name || 'the current project')}</b> only. To add them elsewhere, open that
-       project's settings.</div>`;
+       project's settings.</div>
+       ${CURS().length > 1 ? `<div style="font-size:12.5px;color:var(--muted);margin-top:8px">The currency by each name
+       is what they settle in. Anyone not on AUD settles one-to-one, at each expense's own rate, and never
+       changes what the AUD group owes each other.</div>` : ''}`;
+
+  renderInvites();
+  renderGuestBox();
 
   $('#meBox').innerHTML =
     `<label class="fl">Which one is you?</label>
@@ -1696,7 +1930,7 @@ function renderMore(){
   renderOcrRow();
 }
 
-function renderAll(){ renderProjectHeader(); renderHome(); renderRecurCard(); renderSync();
+function renderAll(){ document.body.classList.toggle('guest', !!GUEST()); renderProjectHeader(); renderHome(); renderRecurCard(); renderSync();
   if ($('#s-history').classList.contains('on')) renderHistory();
   if ($('#s-settle').classList.contains('on'))  renderSettle();
   if ($('#s-more').classList.contains('on'))    renderMore();
@@ -1768,7 +2002,7 @@ function openEdit(id){
   F = {
     id: ex.id, date: ex.date, city: ex.city, cur: ex.currency,
     rateMode: ex.currency === 'AUD' ? 'live' : 'saved', rate: savedRate, curOpen: false,
-    repeat: 'never', until: '', seriesId: ruleIdOf(ex.id),
+    repeat: 'never', until: '', seriesId: ruleIdOf(ex.id), fx: d.fx || null,
     amount: String(ex.amount_local), desc: ex.description, paid_by: ex.paid_by,
     split_type: ex.split_type || 'equal',
     participants: (d.participants && d.participants.length) ? d.participants.slice() : S.people.slice(),
@@ -1955,6 +2189,7 @@ function draftExpense(){
     ex.items = { items, extra: round2(Number(F.extra) || 0) };
     ex.split_detail = { participants: Array.from(new Set(items.flatMap(i => i.people))) };
   }
+  lockFx(ex, F.fx);
   return ex;
 }
 const round2 = n => Math.round((Number(n)||0)*100)/100;
@@ -2000,6 +2235,7 @@ function saveExpense(){
   const ex = draftExpense();
   const err = validate(ex);
   if (err){ toast(err); return; }
+  if (GUEST() && !involvesMe(ex)){ toast('Include yourself — you can only add expenses you\u2019re part of'); return; }
   if (!ex.description) ex.description = ex.city ? ex.city + ' expense' : 'Expense';
 
   const isNew = !ex.id;
@@ -2014,7 +2250,8 @@ function saveExpense(){
       start_date: ex.date, end_date: F.until || '', paused: false, generated_through: '',
       template: { description: ex.description, city: ex.city, paid_by: ex.paid_by, currency: ex.currency,
                   amount_local: ex.amount_local, split_type: ex.split_type,
-                  split_detail: ex.split_detail, items: ex.items }
+                  // Each occurrence takes the rate of its own day, not this one's.
+                  split_detail: Object.assign({}, ex.split_detail, { fx: undefined }), items: ex.items }
     };
     // Due already: add it now under the id the backend would have used.
     if (ex.date <= today()){
@@ -2192,6 +2429,7 @@ function openPay(i){
   payTx = (window.__tx || [])[i];
   if (!payTx) return;
   $('#payWho').textContent = `${payTx.from} pays ${payTx.to}`;
+  $('#payAmtLbl').textContent = 'Amount settled · ' + (payTx.cur || BASE);
   $('#payAmt').value = money(payTx.c).toFixed(2);
   $('#payNote').value = '';
   openSheet('paySheet');
@@ -2201,10 +2439,15 @@ function savePay(){
   const amt = Number($('#payAmt').value);
   if (!(amt > 0)){ toast('Enter an amount'); return; }
   const act = activeProject();
+  const cur = payTx.cur || BASE;
+  // amount_aud stays filled in so totals and older phones still make sense of it;
+  // the one-to-one ledger reads currency + amount_local.
   const st = {
     id: 's' + Date.now() + Math.floor(Math.random()*1000),
     project_id: act ? act.id : '',
-    from: payTx.from, to: payTx.to, amount_aud: round2(amt),
+    from: payTx.from, to: payTx.to,
+    currency: cur, amount_local: round2(amt),
+    amount_aud: round2(cur === BASE ? amt : amt * rateOf(cur)),
     date: today(), note: $('#payNote').value.trim()
   };
   S.settlements.push(st);
@@ -2217,6 +2460,159 @@ function unsettle(id){
   S.settlements = (S.settlements||[]).filter(s => String(s.id) !== String(id));
   enqueue('deleteSettlement', { id });
   persist(); renderAll(); renderSettle(); toast('Settlement removed');
+}
+
+/* ============================================================
+   Invites and guests
+
+   An invite is a token in the Sheet's Access tab, tied to one person and a
+   few projects. The phone makes the token, so an invite can be created
+   offline; its link starts working once this phone has synced. The server
+   does the restricting — a guest's phone is only ever sent their projects,
+   and in them only the expenses and settlements they're part of.
+   ============================================================ */
+
+let INV = null;        // the invite being made: { person, newName, projects, cur }
+let INV_LINK = '';
+
+const b64url = s => btoa(s).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+function inviteLink(token){
+  return location.origin + location.pathname + '#join=' + b64url(JSON.stringify({ u: CFG.url, t: token }));
+}
+/** { url, token } from an invite link (or anything containing one), else null. */
+function parseInvite(text){
+  const m = String(text || '').match(/[#&?]join=([A-Za-z0-9_-]+)/);
+  if (!m) return null;
+  try {
+    const b = m[1].replace(/-/g, '+').replace(/_/g, '/');
+    const j = JSON.parse(atob(b + '='.repeat((4 - b.length % 4) % 4)));
+    return j && j.u && j.t ? { url: String(j.u), token: String(j.t) } : null;
+  } catch(e){ return null; }
+}
+function newToken(){
+  const b = new Uint8Array(16);
+  crypto.getRandomValues(b);
+  return Array.from(b, x => x.toString(16).padStart(2, '0')).join('');
+}
+const involvesMe = ex => ex.paid_by === PREFS.me || (sharesOf(ex)[PREFS.me] || 0) > 0;
+
+function renderInvites(){
+  const box = $('#inviteBox');
+  if (!box) return;
+  const pname = id => (projectById(id) || {}).name || 'a deleted project';
+  box.innerHTML = (S.invites || []).filter(i => !i.revoked).map(i => `
+    <div class="row" style="gap:10px">
+      <div class="av">${esc(initials(i.person))}</div>
+      <div class="grow" style="min-width:0"><div style="font-weight:650">${esc(i.person)}</div>
+        <div style="font-size:12.5px;color:var(--muted)">${esc(i.project_ids.map(pname).join(', '))} · settles in ${esc(settleCur(i.person))}</div></div>
+      <button class="btn sm ghost" data-invlink="${esc(i.token)}">Link</button>
+      <button class="iconbtn" data-invoff="${esc(i.token)}" title="Turn off">×</button>
+    </div>`).join('')
+    + `<button class="btn ghost full sm" id="invNew">+ Invite someone</button>`;
+}
+
+function openInvite(){
+  const act = activeProject();
+  INV = { person:'', newName:'', projects: act ? [act.id] : [], cur:'' };
+  renderInviteForm();
+  openSheet('invSheet');
+}
+
+function renderInviteForm(){
+  const people = S.people.filter(n => n !== PREFS.me);
+  const cur = INV.cur || (INV.person && INV.person !== '+' ? settleCur(INV.person) : BASE);
+  $('#invBody').innerHTML = `
+    <div><label class="fl">Who</label>
+      <div class="chips">${people.map(n => `<button class="chip ${INV.person===n?'on':''}" data-invwho="${esc(n)}">${esc(n)}</button>`).join('')}
+        <button class="chip ${INV.person==='+'?'on':''}" data-invwho="+">+ Someone new</button></div>
+      ${INV.person === '+' ? `<input id="invName" type="text" placeholder="Their name" autocapitalize="words"
+          autocorrect="off" value="${esc(INV.newName)}" style="margin-top:8px">` : ''}
+    </div>
+    <div><label class="fl">Projects they can see</label>
+      <div class="chips">${projects().map(p => `<button class="chip ${INV.projects.includes(p.id)?'on':''}" data-invproj="${esc(p.id)}">${esc(p.name)}</button>`).join('')}</div>
+      <div style="font-size:12.5px;color:var(--muted);margin-top:6px">They join these projects if they aren't in them already.
+        Inside, they only see expenses they're part of.</div>
+    </div>
+    <div><label class="fl">Settles in</label>
+      <div class="chips">${CURS().map(c => `<button class="chip ${cur===c?'on':''}" data-invcur="${c}">${c}</button>`).join('')}
+        <button class="chip" data-invaddcur="1">+ Add currency</button></div>
+      <div style="font-size:12.5px;color:var(--muted);margin-top:6px">${cur === BASE
+        ? 'AUD puts them in the shared pool with everyone else on AUD.'
+        : `Debts with them are worked out in ${esc(cur)} at each expense's rate and settled one-to-one. What the AUD group owes each other doesn't change.`}</div>
+    </div>`;
+}
+
+function createInvite(){
+  const name = INV.person === '+' ? INV.newName.trim() : INV.person;
+  if (!name){ toast('Pick who to invite'); return; }
+  if (!INV.projects.length){ toast('Pick at least one project'); return; }
+  const isNew = !S.people.includes(name);
+  if (isNew && S.people.some(n => n.toLowerCase() === name.toLowerCase())){ toast('Someone already has that name'); return; }
+  const cur = INV.cur || settleCur(name);
+
+  // Queued in this order, and the queue runs in order: person, projects, currency, then the invite.
+  if (isNew){
+    S.people = S.people.concat([name]);
+    enqueue('setPeople', { people: S.people.slice() });
+    PED = null;
+  }
+  INV.projects.forEach(id => {
+    const pr = projectById(id);
+    if (pr && !(pr.members || []).includes(name)){
+      pr.members = (pr.members || []).concat([name]);
+      enqueue('updateProject', pr);
+    }
+  });
+  if (cur !== settleCur(name)){
+    S.personCur = S.personCur || {};
+    if (cur === BASE) delete S.personCur[name]; else S.personCur[name] = cur;
+    enqueue('setPersonCurrency', { name, currency: cur });
+  }
+  const inv = { token: newToken(), person: name, project_ids: INV.projects.slice(), created: today(), revoked: false };
+  S.invites = (S.invites || []).concat([inv]);
+  enqueue('createInvite', inv);
+  persist(); renderAll(); renderMore();
+  closeSheet('invSheet');
+  showInviteLink(inv);
+}
+
+function showInviteLink(inv){
+  INV_LINK = inviteLink(inv.token);
+  const pending = QUEUE.some(j => j.action === 'createInvite' && j.payload && j.payload.token === inv.token);
+  $('#invLinkTitle').textContent = 'Invite for ' + inv.person;
+  $('#invLinkText').textContent = INV_LINK;
+  $('#invLinkNote').textContent = (pending ? 'It starts working once this phone has synced. ' : '')
+    + `Send it to ${inv.person} privately: anyone with the link sees what they see. `
+    + 'On an iPhone they open it in Safari, tap Share → Add to Home Screen, then open the app '
+    + 'from the home screen and paste the same link into the Connect screen.';
+  openSheet('invLinkSheet');
+}
+
+function revokeInvite(token){
+  const inv = (S.invites || []).find(i => i.token === token);
+  if (!inv || !confirm(`Turn off ${inv.person}'s invite link? Their phone stops syncing; you can make a new link any time.`)) return;
+  inv.revoked = true;
+  enqueue('revokeInvite', { token });
+  persist(); renderMore(); toast('Invite turned off');
+}
+
+const standalone = () => navigator.standalone === true || matchMedia('(display-mode: standalone)').matches;
+
+function renderGuestBox(){
+  const g = GUEST(), box = $('#guestBox');
+  if (!box) return;
+  box.style.display = g ? '' : 'none';
+  if (!g) return;
+  const names = (S.projects || []).map(p => p.name).join(', ') || 'no projects yet';
+  box.innerHTML = `<div class="section-label" style="margin-top:4px">Your invite</div>
+    <div class="card stack">
+      <div><div style="font-weight:650">${esc(g.person)}</div>
+      <div style="font-size:13px;color:var(--muted);margin-top:4px">You can see ${esc(names)}, and only the expenses
+        you're part of. You settle in ${esc(settleCur(g.person))}.</div></div>
+      ${standalone() ? '' : `<div style="font-size:13px;color:var(--muted)">To keep it on your home screen: copy your link,
+        tap Share → Add to Home Screen, open the app from there and paste the link.</div>
+        <button class="btn ghost full sm" id="guestCopy">Copy my invite link</button>`}
+    </div>`;
 }
 
 /* ============================================================
@@ -2297,7 +2693,7 @@ document.addEventListener('click', e => {
     }
     renderProjectEditor();
   }
-  else if (d.rate) { openRate(d.rate); }
+  else if (d.rate) { if (!GUEST()) openRate(d.rate); }
   else if (d.pay !== undefined && t.hasAttribute('data-pay')){ openPay(Number(d.pay)); }
   else if (d.unsettle){ unsettle(d.unsettle); }
   else if (d.ip){
@@ -2327,6 +2723,36 @@ document.addEventListener('click', e => {
   if (e.target.id === 'savePeople')   savePeople();
   if (e.target.id === 'addPerson'){ ensurePED(); PED.push({ orig:null, val:'' }); renderMore(); }
   if (e.target.id === 'cancelPeople'){ PED = null; renderMore(); toast('Changes discarded'); }
+  if (e.target.id === 'invNew') openInvite();
+  if (e.target.id === 'guestCopy'){
+    navigator.clipboard.writeText(inviteLink(CFG.token)).then(() => toast('Link copied'), () => toast("Couldn't copy"));
+  }
+  const ib = e.target.closest('[data-invwho],[data-invproj],[data-invcur],[data-invaddcur],[data-invlink],[data-invoff]');
+  if (!ib) return;
+  const d = ib.dataset;
+  if (d.invwho !== undefined){ INV.person = d.invwho; INV.cur = ''; renderInviteForm();
+    if (d.invwho === '+') setTimeout(() => $('#invName') && $('#invName').focus(), 50); }
+  else if (d.invproj){
+    const i = INV.projects.indexOf(d.invproj);
+    if (i >= 0) INV.projects.splice(i, 1); else INV.projects.push(d.invproj);
+    renderInviteForm();
+  }
+  else if (d.invcur){ INV.cur = d.invcur; renderInviteForm(); }
+  else if (d.invaddcur){ openAddCurrency(); }
+  else if (d.invlink){ const inv = (S.invites || []).find(i => i.token === d.invlink); if (inv) showInviteLink(inv); }
+  else if (d.invoff){ revokeInvite(d.invoff); }
+});
+
+document.addEventListener('change', e => {
+  const el = e.target;
+  if (el.dataset && el.dataset.pcur !== undefined){
+    const name = el.dataset.pcur, cur = el.value;
+    S.personCur = S.personCur || {};
+    if (cur === BASE) delete S.personCur[name]; else S.personCur[name] = cur;
+    enqueue('setPersonCurrency', { name, currency: cur });
+    persist(); renderAll();
+    toast(cur === BASE ? `${name} settles in the AUD pool` : `${name} settles in ${cur}, one-to-one`);
+  }
 });
 
 document.addEventListener('input', e => {
@@ -2353,6 +2779,7 @@ document.addEventListener('input', e => {
     const av = el.previousElementSibling;
     if (av && av.classList.contains('av')) av.textContent = initials(el.value) || '?';
   }
+  else if (el.id === 'invName' && INV){ INV.newName = el.value; }
   else if (el.dataset.iname !== undefined && F){ F.items[Number(el.dataset.iname)].name = el.value; }
   else if (el.dataset.iamt !== undefined && F){
     F.items[Number(el.dataset.iamt)].amount = el.value.replace(/[^0-9.]/g,'');
@@ -2453,6 +2880,13 @@ $('#addCurBtn').addEventListener('click', openAddCurrency);
 $('#curAdd').addEventListener('click', () => addCurrency($('#curCode').value));
 $('#rateClear').addEventListener('click', clearRate);
 $('#paySave').addEventListener('click', savePay);
+$('#invCreate').addEventListener('click', createInvite);
+$('#invCopy').addEventListener('click', () =>
+  navigator.clipboard.writeText(INV_LINK).then(() => toast('Link copied'), () => toast("Couldn't copy — press and hold the link")));
+$('#invShare').addEventListener('click', () => {
+  if (navigator.share) navigator.share({ title: 'Trip Split', text: 'Your Trip Split invite', url: INV_LINK }).catch(() => {});
+  else navigator.clipboard.writeText(INV_LINK).then(() => toast('Link copied'));
+});
 $('#syncBtn').addEventListener('click', () => sync());
 $('#forceSync').addEventListener('click', () => { sync(); toast('Syncing…'); });
 $('#refreshRates').addEventListener('click', async () => {
@@ -2462,7 +2896,9 @@ $('#refreshRates').addEventListener('click', async () => {
 });
 
 $('#cfgSave').addEventListener('click', async () => {
-  const url = $('#cfgUrl').value.trim(), token = $('#cfgToken').value.trim();
+  // An invite link pasted into the first box carries both.
+  const inv = parseInvite($('#cfgUrl').value);
+  const url = inv ? inv.url : $('#cfgUrl').value.trim(), token = inv ? inv.token : $('#cfgToken').value.trim();
   if (!/^https:\/\/script\.google\.com\/.*\/exec$/.test(url)){
     $('#setupMsg').innerHTML = `<div class="banner bad">That does not look like an Apps Script <b>/exec</b> URL.</div>`; return;
   }
@@ -2470,7 +2906,7 @@ $('#cfgSave').addEventListener('click', async () => {
   const prev = CFG; CFG = { url, token };
   try {
     const d = await call('bootstrap', {}, { refreshRates:true });
-    S = { projects:d.projects||[], people:d.people||[], expenses:d.expenses||[], rates:d.rates||[], settlements:d.settlements||[], recurring:d.recurring||[] };
+    applyBootstrap(d);
     autoPickProject();
     save(K_CFG, CFG); persist();
     $('#setupMsg').innerHTML = '';
@@ -2484,7 +2920,7 @@ $('#cfgSave').addEventListener('click', async () => {
 $('#cfgClear').addEventListener('click', () => {
   if (QUEUE.length && !confirm(`${QUEUE.length} change(s) have not synced yet. Disconnect anyway?`)) return;
   localStorage.removeItem(K_CFG); localStorage.removeItem(K_STATE); localStorage.removeItem(K_QUEUE);
-  CFG = null; S = { projects:[], people:[], expenses:[], rates:[], settlements:[], recurring:[] }; QUEUE = [];
+  CFG = null; S = EMPTY_STATE(); QUEUE = [];
   go('setup');
 });
 
@@ -2987,7 +3423,7 @@ function renderProjectList(){
         <div style="font-weight:650">${esc(p.name)}${live ? ' <span class="tag live">now</span>' : ''}</div>
         <div style="font-size:12.5px;color:var(--muted)">${esc(projectDates(p))} · ${rows.length} expense${rows.length===1?'':'s'} · ${fmtAudC(total)}</div>
       </div>
-      <button class="iconbtn" data-pedit="${esc(p.id)}" title="Edit">✎</button>
+      <button class="iconbtn owner-only" data-pedit="${esc(p.id)}" title="Edit">✎</button>
     </div>`;
   }).join('') || `<div class="empty">No projects yet.</div>`;
 }
@@ -3262,6 +3698,22 @@ function countUp(el, to, fmt){
 /* ---------------- boot ---------------- */
 autoPickProject();
 renderAll();
+// Opened from an invite link: connect this phone to it.
+(function joinFromLink(){
+  const inv = parseInvite(location.hash);
+  if (!inv) return;
+  history.replaceState(null, '', location.pathname + location.search);
+  if (CFG && CFG.token === inv.token) return;
+  if (CFG && CFG.url){
+    const pending = QUEUE.length ? `\n\n${QUEUE.length} change(s) on this phone haven't synced and will be lost.` : '';
+    if (!confirm('Open this invite? This phone switches to it and stops showing what it shows now.' + pending)) return;
+  }
+  CFG = { url: inv.url, token: inv.token }; save(K_CFG, CFG);
+  S = EMPTY_STATE(); QUEUE = []; persist(); save(K_QUEUE, QUEUE);
+  PREFS = { lastCity:'', me:'', pid:'' }; save(K_PREFS, PREFS);
+})();
+document.body.classList.toggle('guest', !!GUEST());
+
 if (CFG && CFG.url){ go('home'); sync(); checkAi(); }
 else go('setup');
 </script>
