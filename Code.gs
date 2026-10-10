@@ -18,6 +18,7 @@ var SHEET_RATES       = 'ExchangeRates';
 var SHEET_SETTLEMENTS = 'Settlements';
 var SHEET_PROJECTS    = 'Projects';
 var SHEET_RECURRING   = 'Recurring';
+var SHEET_ACCESS      = 'Access';
 
 // Only the starting set. The ExchangeRates tab is the real list from then on,
 // so currencies are added from the app without touching this file.
@@ -25,7 +26,7 @@ var DEFAULT_CURRENCIES = ['AUD'];
 
 // Bump when the app starts relying on something new here. The app compares it and
 // says "redeploy" in plain words instead of failing on an unknown action.
-var API_VERSION = 4;
+var API_VERSION = 5;
 
 /** Every currency the sheet knows about. AUD is always first and always present. */
 function CURRENCIES() {
@@ -37,17 +38,21 @@ function CURRENCIES() {
 }
 
 var HEADERS = {};
-HEADERS[SHEET_PEOPLE]      = ['name'];
+// currency is who settles in what: blank means AUD, the shared pool.
+HEADERS[SHEET_PEOPLE]      = ['name', 'currency'];
 // project_id is appended, not inserted, so an existing sheet keeps its data.
 HEADERS[SHEET_EXPENSES]    = ['id', 'date', 'city', 'description', 'paid_by', 'currency',
                               'amount_local', 'amount_aud', 'split_type',
                               'split_detail_json', 'item_breakdown_json', 'project_id'];
 HEADERS[SHEET_RATES]       = ['currency', 'rate_to_aud', 'last_updated', 'is_manual_override'];
-HEADERS[SHEET_SETTLEMENTS] = ['id', 'from', 'to', 'amount_aud', 'date', 'note', 'project_id'];
+HEADERS[SHEET_SETTLEMENTS] = ['id', 'from', 'to', 'amount_aud', 'date', 'note', 'project_id',
+                              'currency', 'amount_local'];
 HEADERS[SHEET_RECURRING]   = ['id', 'project_id', 'kind', 'frequency', 'start_date', 'end_date',
                               'generated_through', 'paused', 'template_json'];
 HEADERS[SHEET_PROJECTS]    = ['id', 'name', 'start_date', 'end_date',
                               'currencies', 'cities', 'members', 'archived'];
+// One row per invite link. The token is the link's password; revoked turns it off.
+HEADERS[SHEET_ACCESS]      = ['token', 'person', 'project_ids', 'created', 'revoked'];
 
 /* ------------------------------------------------------------------ *
  * One-time setup
@@ -213,7 +218,9 @@ function doPost(e) {
 function handle(e, req) {
   var expected = PropertiesService.getScriptProperties().getProperty('API_TOKEN');
   if (!expected) return json({ ok: false, error: 'Backend not set up — run setup() in the script editor.' });
-  if (String(req.token || '') !== expected) return json({ ok: false, error: 'Bad token' });
+  var who = principal(String(req.token || ''), expected);
+  if (!who) return json({ ok: false, error: 'Bad token' });
+  if (who.revoked) return json({ ok: false, error: 'This invite link has been turned off. Ask for a new one.' });
 
   var action  = String(req.action || 'bootstrap');
   var payload = req.payload || {};
@@ -223,9 +230,11 @@ function handle(e, req) {
   if (action === 'aiStatus' || action === 'parseReceipt' || action === 'parseText') {
     try {
       var aiOut;
+      // A guest's draft may only name people they can see.
+      var names = who.owner ? null : guestPeople(who, guestProjects(who));
       if (action === 'aiStatus')          aiOut = { ai: aiEnabled(), provider: aiProvider() };
-      else if (action === 'parseReceipt') aiOut = { draft: parseReceipt(payload) };
-      else                                aiOut = { draft: parseText(payload) };
+      else if (action === 'parseReceipt') aiOut = { draft: parseReceipt(payload, names) };
+      else                                aiOut = { draft: parseText(payload, names) };
       aiOut.ok = true;
       return json(aiOut);
     } catch (err) {
@@ -242,6 +251,12 @@ function handle(e, req) {
   try {
     var out;
 
+    if (!who.owner) {
+      out = guestAction(who, action, payload, req);
+      out.ok = true;
+      return json(out);
+    }
+
     switch (action) {
       case 'bootstrap':    out = bootstrap(!!req.refreshRates); break;
       case 'addExpense':   out = { expense: addExpense(payload) }; break;
@@ -250,7 +265,10 @@ function handle(e, req) {
       case 'deleteRecurring': out = { id: deleteRecurring(payload.id) }; break;
       case 'updateExpense':out = { expense: updateExpense(payload) }; break;
       case 'deleteExpense':out = { id: deleteExpense(payload.id) }; break;
-      case 'setPeople':    out = { people: setPeople(payload.people) }; break;
+      case 'setPeople':    out = { people: setPeople(payload.people, payload.renames) }; break;
+      case 'setPersonCurrency': out = { personCur: setPersonCurrency(payload.name, payload.currency) }; break;
+      case 'createInvite': out = { invite: createInvite(payload) }; break;
+      case 'revokeInvite': out = { invite: revokeInvite(payload.token) }; break;
       case 'setRate':      out = { rates: setRate(payload.currency, payload.rate_to_aud) }; break;
       case 'addCurrency':  out = { rates: addCurrency(payload.currency) }; break;
       case 'removeCurrency': out = { rates: removeCurrency(payload.currency) }; break;
@@ -364,11 +382,23 @@ function bootstrap(forceRates) {
     recurring:   getRecurring(),
     projects:    getProjects(),
     people:      getPeople(),
+    personCur:   personCurrencies(),
+    invites:     getInvites(),
     expenses:    getExpenses(),
     rates:       rates,
     settlements: getSettlements(),
     serverDate:  ymd(new Date())
   };
+}
+
+/** { name: 'MYR' } for everyone who settles in something other than AUD. */
+function personCurrencies() {
+  var out = {};
+  readRows(SHEET_PEOPLE).forEach(function (r) {
+    var n = String(r.name).trim(), c = String(r.currency || '').trim().toUpperCase();
+    if (n && /^[A-Z]{3}$/.test(c) && c !== 'AUD') out[n] = c;
+  });
+  return out;
 }
 
 function getPeople() {
@@ -405,7 +435,11 @@ function getSettlements() {
       amount_aud: Number(r.amount_aud) || 0,
       date:       r.date instanceof Date ? ymd(r.date) : String(r.date),
       note:       String(r.note || ''),
-      project_id: String(r.project_id || '')
+      project_id: String(r.project_id || ''),
+      // Rows from before per-person currencies are AUD.
+      currency:     String(r.currency || 'AUD'),
+      amount_local: r.amount_local === '' || r.amount_local == null
+                      ? (Number(r.amount_aud) || 0) : (Number(r.amount_local) || 0)
     };
   });
 }
@@ -711,14 +745,45 @@ function materializeRecurring(rateList) {
  * Writes — people
  * ------------------------------------------------------------------ */
 
-function setPeople(names) {
+function setPeople(names, renames) {
   names = (names || []).map(function (n) { return String(n).trim(); })
                        .filter(function (n) { return n; });
   if (!names.length) throw new Error('Need at least one person');
+  renames = renames || {};
+
+  // Keep each person's settle currency, following any rename.
+  var cur = personCurrencies();
+  Object.keys(renames).forEach(function (old) {
+    if (cur[old] && !cur[renames[old]]) cur[renames[old]] = cur[old];
+  });
+
   var sh = sheet(SHEET_PEOPLE);
-  if (sh.getLastRow() > 1) sh.getRange(2, 1, sh.getLastRow() - 1, 1).clearContent();
-  sh.getRange(2, 1, names.length, 1).setValues(names.map(function (n) { return [n]; }));
+  if (sh.getLastRow() > 1) sh.getRange(2, 1, sh.getLastRow() - 1, 2).clearContent();
+  sh.getRange(2, 1, names.length, 2).setValues(names.map(function (n) { return [n, cur[n] || '']; }));
+
+  // An invite is tied to a name, so it follows a rename too.
+  if (Object.keys(renames).length) {
+    var ash = sheet(SHEET_ACCESS), last = ash.getLastRow();
+    if (last > 1) {
+      var vals = ash.getRange(2, 2, last - 1, 1).getValues();
+      var changed = false;
+      vals.forEach(function (v) { if (renames[v[0]]) { v[0] = renames[v[0]]; changed = true; } });
+      if (changed) ash.getRange(2, 2, vals.length, 1).setValues(vals);
+    }
+  }
   return names;
+}
+
+/** Who settles in what. Blank or AUD puts them back in the shared AUD pool. */
+function setPersonCurrency(name, currency) {
+  name = String(name || '').trim();
+  var c = String(currency || '').trim().toUpperCase();
+  if (c === 'AUD') c = '';
+  if (c && CURRENCIES().indexOf(c) < 0) throw new Error('Add ' + c + ' under Exchange rates first.');
+  var r = findRowById(SHEET_PEOPLE, name);         // column 1 is the name
+  if (r < 0) throw new Error(name + ' is not in the People list.');
+  sheet(SHEET_PEOPLE).getRange(r, 2).setValue(c);
+  return personCurrencies();
 }
 
 /* ------------------------------------------------------------------ *
@@ -796,13 +861,15 @@ function addSettlement(p) {
     Number(p.amount_aud) || 0,
     String(p.date || ymd(new Date())),
     String(p.note || ''),
-    String(p.project_id || '')
+    String(p.project_id || ''),
+    String(p.currency || 'AUD'),
+    p.amount_local == null || p.amount_local === '' ? (Number(p.amount_aud) || 0) : (Number(p.amount_local) || 0)
   ];
   var r = findRowById(SHEET_SETTLEMENTS, row[0]);          // upsert, as with expenses
   if (r > 0) sheet(SHEET_SETTLEMENTS).getRange(r, 1, 1, row.length).setValues([row]);
   else sheet(SHEET_SETTLEMENTS).appendRow(row);
   return { id: row[0], from: row[1], to: row[2], amount_aud: row[3],
-           date: row[4], note: row[5], project_id: row[6] };
+           date: row[4], note: row[5], project_id: row[6], currency: row[7], amount_local: row[8] };
 }
 
 function deleteSettlement(id) {
@@ -810,6 +877,166 @@ function deleteSettlement(id) {
   if (r < 0) return id;                    // already gone
   sheet(SHEET_SETTLEMENTS).deleteRow(r);
   return id;
+}
+
+/* ------------------------------------------------------------------ *
+ * Invites — guests who see part of the data
+ *
+ * Your own token (API_TOKEN) sees and changes everything. Each invite in the
+ * Access tab is a separate token for one person and a few projects. With it
+ * the server sends only those projects and, within them, only the expenses
+ * and settlements that person is part of — so nothing else ever reaches their
+ * phone. They can add, edit and delete expenses they're part of, and log or
+ * undo their own settlements; everything else is refused.
+ * ------------------------------------------------------------------ */
+
+function isTrue(v) { return v === true || String(v).toLowerCase() === 'true'; }
+
+/** null for an unknown token; { revoked: true } for one that's been turned off. */
+function principal(token, ownerToken) {
+  if (!token) return null;
+  if (token === ownerToken) return { owner: true };
+  var row = readRows(SHEET_ACCESS).filter(function (r) { return String(r.token) === token; })[0];
+  if (!row) return null;
+  if (isTrue(row.revoked)) return { revoked: true };
+  return { owner: false, person: String(row.person), projects: csv(row.project_ids) };
+}
+
+function getInvites() {
+  return readRows(SHEET_ACCESS).map(function (r) {
+    return {
+      token:       String(r.token),
+      person:      String(r.person),
+      project_ids: csv(r.project_ids),
+      created:     r.created instanceof Date ? ymd(r.created) : String(r.created || ''),
+      revoked:     isTrue(r.revoked)
+    };
+  }).filter(function (i) { return i.token; });
+}
+
+/** The phone makes the token, so an invite can be created offline. Upsert by token. */
+function createInvite(p) {
+  var token = String(p.token || '');
+  if (!/^[a-f0-9]{32}$/.test(token)) throw new Error('Bad invite token.');
+  var person = String(p.person || '').trim();
+  if (getPeople().indexOf(person) < 0) throw new Error(person + ' is not in the People list.');
+  var ids = (p.project_ids || []).map(String).filter(function (x) { return x; });
+  if (!ids.length) throw new Error('Pick at least one project.');
+  var row = [token, person, ids.join(','), String(p.created || ymd(new Date())), false];
+  var r = findRowById(SHEET_ACCESS, token);
+  if (r > 0) sheet(SHEET_ACCESS).getRange(r, 1, 1, row.length).setValues([row]);
+  else sheet(SHEET_ACCESS).appendRow(row);
+  return getInvites().filter(function (i) { return i.token === token; })[0];
+}
+
+function revokeInvite(token) {
+  var r = findRowById(SHEET_ACCESS, String(token || ''));
+  if (r < 0) return null;                         // never synced: nothing to turn off
+  sheet(SHEET_ACCESS).getRange(r, 5).setValue(true);
+  return getInvites().filter(function (i) { return i.token === token; })[0];
+}
+
+/** Is this person part of the expense — paying, or sharing in it? */
+function involves(ex, name, members) {
+  if (String(ex.paid_by) === name) return true;
+  var d = ex.split_detail || {};
+  var type = String(ex.split_type || 'equal');
+  if (type === 'exact' || type === 'percent') return Number((d.shares || {})[name]) > 0;
+  if (type === 'itemized') {
+    var items = (ex.items && ex.items.items) || [];
+    return items.some(function (it) { return (it.people || []).indexOf(name) >= 0; });
+  }
+  var parts = (d.participants && d.participants.length) ? d.participants : (members || []);
+  return parts.indexOf(name) >= 0;
+}
+
+/** The guest's projects that still exist, by id. */
+function guestProjects(who) {
+  var out = {};
+  getProjects().forEach(function (p) { if (who.projects.indexOf(p.id) >= 0) out[p.id] = p; });
+  return out;
+}
+
+/** Everyone on the guest's projects — the names they need to split with. */
+function guestPeople(who, projects) {
+  var names = {};
+  names[who.person] = true;
+  Object.keys(projects).forEach(function (id) {
+    projects[id].members.forEach(function (n) { names[n] = true; });
+  });
+  return getPeople().filter(function (n) { return names[n]; });
+}
+
+function guestBootstrap(who, projects) {
+  var people = guestPeople(who, projects);
+  var allCur = personCurrencies(), personCur = {};
+  people.forEach(function (n) { if (allCur[n]) personCur[n] = allCur[n]; });
+  return {
+    apiVersion:  API_VERSION,
+    guest:       { person: who.person, project_ids: Object.keys(projects) },
+    recurring:   [],
+    projects:    getProjects().filter(function (p) { return projects[p.id]; }),
+    people:      people,
+    personCur:   personCur,
+    expenses:    getExpenses().filter(function (ex) {
+                   var pr = projects[ex.project_id];
+                   return pr && involves(ex, who.person, pr.members);
+                 }),
+    rates:       refreshRates(false),
+    settlements: getSettlements().filter(function (s) {
+                   return projects[s.project_id] && (s.from === who.person || s.to === who.person);
+                 }),
+    serverDate:  ymd(new Date())
+  };
+}
+
+function rowById(name, id) {
+  var r = findRowById(name, id);
+  if (r < 0) return null;
+  return sheet(name).getRange(r, 1, 1, HEADERS[name].length).getValues()[0];
+}
+
+function guestCheckExpense(who, projects, ex) {
+  var pr = projects[String(ex.project_id || '')];
+  if (!pr) throw new Error('That expense is in a project you haven’t been invited to.');
+  if (!involves(ex, who.person, pr.members)) {
+    throw new Error('You can only add or change expenses you’re part of.');
+  }
+}
+
+function guestCheckSettlement(who, projects, s) {
+  if (!projects[String(s.project_id || '')]) throw new Error('That settlement is in a project you haven’t been invited to.');
+  if (s.from !== who.person && s.to !== who.person) throw new Error('You can only log settlements you’re part of.');
+}
+
+/** Everything a guest may do. The old row and the new one must both be theirs. */
+function guestAction(who, action, p, req) {
+  var projects = guestProjects(who);
+  switch (action) {
+    case 'bootstrap':
+      return guestBootstrap(who, projects);
+    case 'addExpense':
+    case 'updateExpense':
+      guestCheckExpense(who, projects, p);
+      var old = rowById(SHEET_EXPENSES, p.id);
+      if (old) guestCheckExpense(who, projects, rowToExpense(old));
+      return { expense: addExpense(p) };
+    case 'deleteExpense':
+      var gone = rowById(SHEET_EXPENSES, p.id);
+      if (gone) guestCheckExpense(who, projects, rowToExpense(gone));
+      return { id: deleteExpense(p.id) };
+    case 'addSettlement':
+      guestCheckSettlement(who, projects, p);
+      var oldS = rowById(SHEET_SETTLEMENTS, p.id);
+      if (oldS) guestCheckSettlement(who, projects, { from: oldS[1], to: oldS[2], project_id: oldS[6] });
+      return { settlement: addSettlement(p) };
+    case 'deleteSettlement':
+      var s = rowById(SHEET_SETTLEMENTS, p.id);
+      if (s) guestCheckSettlement(who, projects, { from: s[1], to: s[2], project_id: s[6] });
+      return { id: deleteSettlement(p.id) };
+    default:
+      throw new Error('Only the trip organiser can change that.');
+  }
 }
 
 /* ------------------------------------------------------------------ *
@@ -1583,8 +1810,8 @@ function normaliseDraft(d, people, fallbackCurrency, fallbackCity, cities, curre
   };
 }
 
-function parseReceipt(p) {
-  var people = getPeople();
+function parseReceipt(p, people) {
+  people = people || getPeople();
   if (!people.length) throw new Error('Add people in Settings first.');
 
   var b64 = String(p.image || '');
@@ -1608,8 +1835,8 @@ function receiptPrompt(p) {
   return t;
 }
 
-function parseText(p) {
-  var people = getPeople();
+function parseText(p, people) {
+  people = people || getPeople();
   if (!people.length) throw new Error('Add people in Settings first.');
 
   var text = String(p.text || '').trim();
