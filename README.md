@@ -172,6 +172,12 @@ in the `ExchangeRates` tab for the day.
 Shares are calculated in cents with largest-remainder rounding, so they always
 add back to the total exactly.
 
+### History
+
+History and the settlement log are grouped by month, newest first, each with
+its count and total. Tap a month to fold it, or use **Collapse all** /
+**Expand all**. What's folded is remembered on that phone, per project.
+
 ### Settle up
 
 The app works out the fewest transfers that clear every balance by matching
