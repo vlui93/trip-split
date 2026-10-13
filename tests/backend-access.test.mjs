@@ -129,4 +129,13 @@ t('older settlement rows read back as AUD', () => {
   assert.equal(s.amount_local, 10);
 });
 
+t('categories are saved, read back, and junk is dropped', () => {
+  ok(api(owner, 'addExpense', Object.assign(E('e_cat', 'p_china', 'Alex', ['Alex', 'Sam']), { category: 'food' })));
+  ok(api(owner, 'addExpense', Object.assign(E('e_bad', 'p_china', 'Alex', ['Alex', 'Sam']), { category: '<script>' })));
+  const ex = ok(api(owner, 'bootstrap', {})).expenses;
+  assert.equal(ex.find(e => e.id === 'e_cat').category, 'food');
+  assert.equal(ex.find(e => e.id === 'e_bad').category, '');
+  assert.equal(ex.find(e => e.id === 'e_trio').category, '');
+});
+
 console.log(`\n${n} passed`);
