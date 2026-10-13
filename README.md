@@ -174,9 +174,28 @@ add back to the total exactly.
 
 ### History
 
-History and the settlement log are grouped by month, newest first, each with
-its count and total. Tap a month to fold it, or use **Collapse all** /
-**Expand all**. What's folded is remembered on that phone, per project.
+The home screen's recent list (the latest two months), History and the
+settlement log are grouped by month, newest first, each with its count and
+total. Tap a month to fold it, or use **Collapse all** / **Expand all**. What's
+folded is remembered on that phone, per project.
+
+### Categories and the breakdown
+
+Each expense can have a quick category: Food & drink, Transport, Stay,
+Activities, Shopping, Groceries, Bills or Other. While you type the description
+the app suggests one ("Taxi to the airport" → Transport). Tapping a category
+yourself stops the suggestions for that expense. Receipt scans fill it in too.
+
+**History → Breakdown** shows a donut and a ranked list with amounts and
+percentages, in AUD. Choose:
+
+- **Split by:** category, place, who paid, or who it was for (everyone's shares side by side).
+- **Counting:** everything spent, or one person's share ("My share" is what you personally consumed).
+- **Period:** all time, or a single month.
+
+Tap a slice or a row to pick it out. Expenses saved before categories existed
+are counted by a guess from their description, and the breakdown says how many.
+Edit them to set one.
 
 ### Settle up
 
@@ -326,7 +345,7 @@ shows a warning first.
 |---|---|
 | `Projects` | id, name, start_date, end_date, currencies, cities, members, archived |
 | `People` | name, currency (blank = AUD) |
-| `Expenses` | id, date, city, description, paid_by, currency, amount_local, amount_aud, split_type, split_detail_json, item_breakdown_json, project_id |
+| `Expenses` | id, date, city, description, paid_by, currency, amount_local, amount_aud, split_type, split_detail_json, item_breakdown_json, project_id, category |
 | `ExchangeRates` | currency, rate_to_aud, last_updated, is_manual_override |
 | `Settlements` | id, from, to, amount_aud, date, note, project_id, currency, amount_local |
 | `Recurring` | id, project_id, kind, frequency, start_date, end_date, generated_through, paused, template_json |
@@ -385,6 +404,6 @@ no rows.
 |---|---|
 | `index.html` | The whole frontend: markup, styles and logic |
 | `Code.gs` | Apps Script backend |
-| `tests/` | `node tests/<name>.test.mjs`: receipt parsing, the currency ledger, and invite access control (runs `Code.gs` against a fake Sheet in `fake-gas.mjs`) |
+| `tests/` | `node tests/<name>.test.mjs`: receipt parsing, the currency ledger, categories and the breakdown, and invite access control (runs `Code.gs` against a fake Sheet in `fake-gas.mjs`) |
 | `manifest.webmanifest` | Web app manifest |
 | `icon-*-v2.png`, `mkicon.py`, `icon.svg` | Home-screen icons and the script that generates them |

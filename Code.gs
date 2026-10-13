@@ -20,13 +20,17 @@ var SHEET_PROJECTS    = 'Projects';
 var SHEET_RECURRING   = 'Recurring';
 var SHEET_ACCESS      = 'Access';
 
+// Quick categories for the spending breakdown. Blank means not chosen yet.
+var CATEGORIES = ['food', 'transport', 'stay', 'activities', 'shopping', 'groceries', 'bills', 'other'];
+function category(c) { c = String(c || '').toLowerCase(); return CATEGORIES.indexOf(c) >= 0 ? c : ''; }
+
 // Only the starting set. The ExchangeRates tab is the real list from then on,
 // so currencies are added from the app without touching this file.
 var DEFAULT_CURRENCIES = ['AUD'];
 
 // Bump when the app starts relying on something new here. The app compares it and
 // says "redeploy" in plain words instead of failing on an unknown action.
-var API_VERSION = 5;
+var API_VERSION = 6;
 
 /** Every currency the sheet knows about. AUD is always first and always present. */
 function CURRENCIES() {
@@ -40,10 +44,10 @@ function CURRENCIES() {
 var HEADERS = {};
 // currency is who settles in what: blank means AUD, the shared pool.
 HEADERS[SHEET_PEOPLE]      = ['name', 'currency'];
-// project_id is appended, not inserted, so an existing sheet keeps its data.
+// project_id and category are appended, not inserted, so an existing sheet keeps its data.
 HEADERS[SHEET_EXPENSES]    = ['id', 'date', 'city', 'description', 'paid_by', 'currency',
                               'amount_local', 'amount_aud', 'split_type',
-                              'split_detail_json', 'item_breakdown_json', 'project_id'];
+                              'split_detail_json', 'item_breakdown_json', 'project_id', 'category'];
 HEADERS[SHEET_RATES]       = ['currency', 'rate_to_aud', 'last_updated', 'is_manual_override'];
 HEADERS[SHEET_SETTLEMENTS] = ['id', 'from', 'to', 'amount_aud', 'date', 'note', 'project_id',
                               'currency', 'amount_local'];
@@ -421,7 +425,8 @@ function getExpenses() {
       split_type:   String(r.split_type || 'equal'),
       split_detail: parseJson(r.split_detail_json, {}),
       items:        parseJson(r.item_breakdown_json, null),
-      project_id:   String(r.project_id || '')
+      project_id:   String(r.project_id || ''),
+      category:     category(r.category)
     };
   });
 }
@@ -721,7 +726,8 @@ function materializeRecurring(rateList) {
           paid_by: t.paid_by, currency: cur,
           amount_local: local, amount_aud: Math.round(local * r * 100) / 100,
           split_type: t.split_type || 'equal',
-          split_detail: t.split_detail || {}, items: t.items || null
+          split_detail: t.split_detail || {}, items: t.items || null,
+          category: t.category || ''
         });
       }
       made++;
@@ -804,7 +810,8 @@ function expenseRow(p) {
     String(p.split_type || 'equal'),
     JSON.stringify(p.split_detail || {}),
     p.items ? JSON.stringify(p.items) : '',
-    String(p.project_id || '')
+    String(p.project_id || ''),
+    category(p.category)
   ];
 }
 
@@ -818,7 +825,8 @@ function rowToExpense(row) {
     split_type: o.split_type,
     split_detail: parseJson(o.split_detail_json, {}),
     items: parseJson(o.item_breakdown_json, null),
-    project_id: String(o.project_id || '')
+    project_id: String(o.project_id || ''),
+    category: category(o.category)
   };
 }
 
@@ -1346,7 +1354,7 @@ function draftSchema(people, cities, currencies) {
     type: 'object',
     additionalProperties: false,
     required: ['description', 'date', 'city', 'currency', 'amount_local', 'paid_by',
-               'split_type', 'participants', 'shares', 'items', 'extra', 'note'],
+               'split_type', 'participants', 'shares', 'items', 'extra', 'note', 'category'],
     properties: {
       description:  { type: 'string', description: 'Short label, e.g. "Hotpot dinner". Never blank.' },
       date:         { type: 'string', description: 'YYYY-MM-DD. Use the date on the receipt if legible, otherwise today.' },
@@ -1387,7 +1395,10 @@ function draftSchema(people, cities, currencies) {
         }
       },
       extra: { type: 'number', description: 'Tax, service charge and tip combined, in local currency. 0 if none.' },
-      note:  { type: 'string', description: 'One short sentence on anything uncertain, for the human to check. Empty if nothing.' }
+      note:  { type: 'string', description: 'One short sentence on anything uncertain, for the human to check. Empty if nothing.' },
+      category: { type: 'string', enum: CATEGORIES,
+                  description: 'food = restaurants, cafes, drinks; stay = hotels; activities = tickets, tours, attractions; ' +
+                               'groceries = supermarkets; bills = utilities, rent, phone; other if none fit.' }
     }
   };
 }
@@ -1806,7 +1817,8 @@ function normaliseDraft(d, people, fallbackCurrency, fallbackCity, cities, curre
     shares:       shares,
     items:        items,
     extra:        num(d.extra),
-    note:         String(d.note || '').slice(0, 200)
+    note:         String(d.note || '').slice(0, 200),
+    category:     category(d.category)
   };
 }
 

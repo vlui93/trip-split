@@ -161,6 +161,21 @@ select{background-image:linear-gradient(45deg,transparent 50%,var(--muted) 50%),
 .month-body{border-top:1px solid var(--line)}
 .label-row{display:flex;align-items:baseline;justify-content:space-between;gap:12px}
 .label-row .section-label{margin-bottom:8px}
+/* Breakdown: categorical slots from the validated palette, light and dark. */
+:root{--c1:#2a78d6;--c2:#eb6834;--c3:#1baf7a;--c4:#eda100;--c5:#e87ba4;--c6:#008300;--c7:#6250d6;--c-rest:#b4b3ac}
+@media (prefers-color-scheme:dark){:root{--c1:#3987e5;--c2:#d95926;--c3:#199e70;--c4:#c98500;--c5:#d55181;--c6:#008300;--c7:#9085e9;--c-rest:#4a5170}}
+.seg{display:grid;grid-template-columns:repeat(2,1fr);gap:4px;padding:4px;background:var(--surface-2);border-radius:12px;margin:4px 0 6px}
+.seg button{width:100%;justify-content:center;text-align:center;padding:8px 0;border-radius:9px;font-weight:650;font-size:14px;color:var(--muted)}
+.seg button.on{background:var(--surface);color:var(--text);box-shadow:0 1px 2px rgba(0,0,0,.08)}
+.donut{display:block;margin:6px auto 4px;width:200px;height:200px}
+.donut path{transition:opacity .15s;cursor:pointer}
+.donut .dim{opacity:.28}
+.bd-row{display:grid;grid-template-columns:12px 1fr auto;gap:4px 10px;align-items:center;padding:10px 0;width:100%;text-align:left}
+.bd-row+.bd-row{border-top:1px solid var(--line)}
+.bd-row .dot{width:10px;height:10px;border-radius:3px}
+.bd-row .bar{grid-column:2/4;height:6px;border-radius:3px;background:var(--surface-2);overflow:hidden}
+.bd-row .bar i{display:block;height:100%;border-radius:3px}
+.bd-row.dim{opacity:.45}
 .empty{text-align:center;color:var(--muted);padding:38px 18px;font-size:14.5px;line-height:1.5}
 .empty .big{display:block;font-size:30px;margin-bottom:10px;opacity:.45}
 
@@ -297,13 +312,25 @@ body.guest .owner-only{display:none !important}
 
   <div id="recurCard" class="owner-only"></div>
 
-  <div class="section-label">Recent</div>
-  <div class="card" id="recent"></div>
+  <div class="label-row"><div class="section-label">Recent</div>
+    <button class="linkbtn" data-foldall="home" id="homeFoldAll" style="display:none"></button></div>
+  <div id="recent"></div>
 </section>
 
 <!-- ============ HISTORY ============ -->
 <section id="s-history" class="screen">
   <div class="topbar"><h1 class="grow">History</h1><span class="tag mono" id="histCount">0</span></div>
+  <div class="seg" id="histView"><button data-hview="list">List</button><button data-hview="breakdown">Breakdown</button></div>
+  <div id="bdWrap" style="display:none">
+    <div class="section-label" style="margin-top:12px">Split by</div>
+    <div class="chips" id="bdBy"></div>
+    <div class="section-label">Counting</div>
+    <div class="chips" id="bdWho"></div>
+    <div class="section-label">Period</div>
+    <div class="chips" id="bdWhen"></div>
+    <div class="card" id="bdChart" style="margin-top:12px"></div>
+  </div>
+  <div id="listWrap">
   <div class="section-label" style="margin-top:4px">City</div>
   <div class="chips" id="fCity"></div>
   <div class="section-label">Person involved</div>
@@ -311,6 +338,7 @@ body.guest .owner-only{display:none !important}
   <div class="label-row"><div class="section-label">Results</div>
     <button class="linkbtn" data-foldall="hist" id="histFoldAll" style="display:none"></button></div>
   <div id="histList"></div>
+  </div>
 </section>
 
 <!-- ============ SETTLE ============ -->
@@ -423,6 +451,10 @@ body.guest .owner-only{display:none !important}
       <div>
         <label class="fl" for="exDesc">What for</label>
         <input id="exDesc" type="text" placeholder="Dinner, taxi, tickets…">
+      </div>
+      <div>
+        <label class="fl">Category</label>
+        <div class="chips" id="exCats"></div>
       </div>
       <div>
         <label class="fl">Paid by</label>
@@ -1190,7 +1222,7 @@ function enqueue(action, payload){
 function persist(){ save(K_STATE, S); }
 
 // The backend version this app needs. Older backends get a plain "redeploy" message.
-const API_NEEDED = 5;
+const API_NEEDED = 6;
 let BACKEND_OLD = false;
 
 function friendlyError(msg){
@@ -1397,9 +1429,14 @@ function renderHome(){
       ? `${tx[0].from} → ${tx[0].to} · ${fmtCurC(tx[0].c, tx[0].cur)}`
       : `${tx.length} transfers clear it`;
 
-  const recent = pExpenses().slice().sort(byDateDesc).slice(0,6);
-  $('#recent').innerHTML = recent.length ? recent.map(exRow).join('')
-    : `<div class="empty"><span class="big">🧾</span>No expenses yet.<br>Tap <b>+</b> to add the first one.</div>`;
+  // The two latest months with anything in them, in full; everything older is in History.
+  const all = pExpenses().slice().sort(byDateDesc);
+  const keep = monthsOf(all).slice(0, 2);
+  HOME_LIST = all.filter(e => keep.includes(monthKey(e.date)));
+  $('#recent').innerHTML = HOME_LIST.length
+    ? monthGroups('home', HOME_LIST, exRow, g => g.length + ' · ' + fmtAudC(g.reduce((a,e) => a + cents(e.amount_aud), 0)))
+    : `<div class="card"><div class="empty"><span class="big">🧾</span>No expenses yet.<br>Tap <b>+</b> to add the first one.</div></div>`;
+  foldAllButton('home', HOME_LIST);
 }
 
 function byDateDesc(a,b){
@@ -1411,7 +1448,7 @@ function exRow(ex){
   const me = ex.currency !== 'AUD';
   const meta = [ex.date, ex.city, ex.paid_by + ' paid', splitLabel(ex.split_type)].filter(Boolean).join(' · ');
   return `<button class="ex press" data-ex="${esc(ex.id)}">
-    <div class="ic">${esc(cityIcon(ex.city) || dayBadge(ex.date))}</div>
+    <div class="ic">${ex.category && catOf(ex.category) ? catOf(ex.category).icon : esc(cityIcon(ex.city) || dayBadge(ex.date))}</div>
     <div class="grow">
       <div class="t1 ellip">${isOccurrence(ex.id) ? '<span style="color:var(--accent)">↻</span> ' : ''}${esc(ex.description || 'Expense')}</div>
       <div class="t2 ellip">${esc(meta)}</div>
@@ -1439,9 +1476,15 @@ function splitLabel(t){
 /* ---------------- render: history ---------------- */
 
 let HF = { city:'', person:'' };
-let HIST_LIST = [];      // what History is showing, so "Collapse all" folds exactly those months
+let HIST_LIST = [];
+let HOME_LIST = [];      // what History is showing, so "Collapse all" folds exactly those months
 
 function renderHistory(){
+  const view = PREFS.histView === 'breakdown' ? 'breakdown' : 'list';
+  $$('#histView button').forEach(b => b.classList.toggle('on', b.dataset.hview === view));
+  $('#bdWrap').style.display = view === 'breakdown' ? '' : 'none';
+  $('#listWrap').style.display = view === 'list' ? '' : 'none';
+  if (view === 'breakdown') renderBreakdown();
   const cities = Array.from(new Set(pExpenses().map(e => e.city).filter(Boolean)));
   const cityWrap = $('#fCity').previousElementSibling;   // its section label
   if (cities.length > 1){
@@ -1524,6 +1567,191 @@ function renderSettle(){
   foldAllButton('settle', log);
 }
 
+/* ---------------- categories and the spending breakdown ---------------- */
+
+/* cats:start — pure functions, exercised by tests/breakdown.test.mjs */
+const CATS = [
+  { id:'food',       label:'Food & drink', icon:'🍜' },
+  { id:'transport',  label:'Transport',    icon:'🚕' },
+  { id:'stay',       label:'Stay',         icon:'🏨' },
+  { id:'activities', label:'Activities',   icon:'🎟️' },
+  { id:'shopping',   label:'Shopping',     icon:'🛍️' },
+  { id:'groceries',  label:'Groceries',    icon:'🛒' },
+  { id:'bills',      label:'Bills',        icon:'💡' },
+  { id:'other',      label:'Other',        icon:'📦' },
+];
+const catOf = id => CATS.find(c => c.id === id) || null;
+
+// Checked in this order, so "train tickets" is transport and "7-Eleven snacks" groceries.
+const CAT_WORDS = [
+  ['groceries',  /grocer|supermarket|woolworths|coles|\baldi\b|7-?eleven|circle ?k|wellcome|park ?n ?shop|convenience|超市|便利/i],
+  ['transport',  /taxi|\buber\b|didi|\bgrab\b|\bcab\b|\bbus\b|train|\bmtr\b|metro|subway|ferry|turbojet|flight|airline|airport|tram|octopus|petrol|fuel|parking|\btolls?\b|car hire|high.?speed|高铁|高鐵|地铁|地鐵|的士|机场|機場/i],
+  ['stay',       /hotel|hostel|airbnb|accommodation|agoda|booking\.com|resort|\binn\b|lodg|酒店|民宿/i],
+  ['bills',      /\brent\b|electric|power bill|gas bill|\bwater\b|internet|wi-?fi|phone bill|mobile plan|\bsim\b|insurance|utilit|council|strata|subscription|netflix|spotify/i],
+  ['activities', /ticket|\btours?\b|museum|disney|ocean park|the peak|cable car|\bshow\b|concert|admission|attraction|\bspa\b|massage|cruise|temple|\bzoo\b|aquarium|门票|門票/i],
+  ['shopping',   /\bshop|souvenir|\bgifts?\b|clothes|shoes|\bmall\b|duty.?free|uniqlo|cosmetic|\bsasa\b|watsons/i],
+  ['food',       /dinner|lunch|breakfast|brunch|supper|\bmeals?\b|restaurant|\bcaf[eé]|coffee|\btea\b|\bbar\b|\bbeers?\b|\bwine\b|drinks?|dim sum|yum cha|hot ?pot|noodle|ramen|\bbbq\b|snack|dessert|bakery|egg tart|bubble tea|boba|starbucks|mcdonald|\bkfc\b|\bfood\b|\beat|餐|飯|饭|茶|咖啡|麵|面/i],
+];
+function guessCategory(desc){
+  const d = String(desc || '');
+  const hit = CAT_WORDS.find(([, re]) => re.test(d));
+  return hit ? hit[0] : '';
+}
+
+/**
+ * Totals for a breakdown, in AUD cents.
+ *   by:  'category' | 'place' | 'payer' | 'person'
+ *   who: '' counts whole expenses; a name counts only that person's share.
+ *        Ignored for 'person', which is everyone's shares side by side.
+ * Returns [{ key, c }] for every key above zero, plus how many were guessed.
+ */
+function breakdown(expenses, by, who, shares){
+  const tot = {};
+  let guessed = 0;
+  const add = (k, c) => { if (c > 0) tot[k] = (tot[k] || 0) + c; };
+  expenses.forEach(ex => {
+    if (by === 'person'){
+      const sh = shares(ex);
+      Object.keys(sh).forEach(n => add(n, sh[n]));
+      return;
+    }
+    const c = who ? (shares(ex)[who] || 0) : Math.round((Number(ex.amount_aud) || 0) * 100);
+    let k;
+    if (by === 'category'){
+      k = ex.category;
+      if (!k){ k = guessCategory(ex.description) || 'other'; if (c > 0) guessed++; }
+    }
+    else if (by === 'place') k = ex.city || '';
+    else k = ex.paid_by;
+    add(k, c);
+  });
+  return { rows: Object.keys(tot).map(key => ({ key, c: tot[key] })), guessed };
+}
+
+/**
+ * Which slices the donut draws: at most six, in a fixed entity order so colours
+ * and neighbours never depend on size. Past six, the smallest fold into one
+ * "rest" slice drawn last.
+ */
+function slices(rows, order){
+  const rank = k => { const i = order.indexOf(k); return i < 0 ? 1e6 : i; };
+  const byOrder = rows.slice().sort((a, b) => rank(a.key) - rank(b.key) || a.key.localeCompare(b.key));
+  if (byOrder.length <= 6) return byOrder;
+  const keep = new Set(rows.slice().sort((a, b) => b.c - a.c).slice(0, 5).map(r => r.key));
+  const rest = byOrder.filter(r => !keep.has(r.key)).reduce((a, r) => a + r.c, 0);
+  return byOrder.filter(r => keep.has(r.key)).concat([{ key: '__rest', c: rest }]);
+}
+/* cats:end */
+
+function renderCats(){
+  const box = $('#exCats');
+  if (!box || !F) return;
+  box.innerHTML = CATS.map(c =>
+    `<button class="chip ${F.category===c.id?'on':''}" data-cat="${c.id}">${c.icon} ${esc(c.label)}</button>`).join('');
+}
+
+/* What the breakdown is showing. Remembered on this phone. */
+function BD(){
+  PREFS.bd = Object.assign({ by:'category', who:'', when:'' }, PREFS.bd || {});
+  if (GUEST() && PREFS.bd.who === '') PREFS.bd.who = GUEST().person;    // a guest only has their own expenses
+  return PREFS.bd;
+}
+
+/** Each entity keeps one colour for good: its place in a stable list, not its rank. */
+function bdOrder(by){
+  if (by === 'category') return CATS.map(c => c.id);
+  if (by === 'place') return pCities().concat(['']);
+  return pPeople().slice();
+}
+function bdLabel(by, k, plain){
+  if (k === '__rest') return 'Everything else';
+  if (by === 'category') return catOf(k) ? (plain ? '' : catOf(k).icon + ' ') + catOf(k).label : k;
+  if (by === 'place') return k || 'No place';
+  return k;
+}
+function bdColor(by, k){
+  if (k === '__rest' || (by === 'category' && k === 'other')) return 'var(--c-rest)';
+  const i = bdOrder(by).indexOf(k);
+  return i >= 0 && i < 7 ? `var(--c${i + 1})` : 'var(--c-rest)';
+}
+
+let BD_HL = '';     // the slice tapped, if any
+
+function arcPath(cx, cy, r0, r1, a0, a1){
+  const p = (r, a) => [cx + r * Math.sin(a), cy - r * Math.cos(a)].map(n => n.toFixed(2)).join(' ');
+  const big = a1 - a0 > Math.PI ? 1 : 0;
+  return `M${p(r1, a0)}A${r1} ${r1} 0 ${big} 1 ${p(r1, a1)}L${p(r0, a1)}A${r0} ${r0} 0 ${big} 0 ${p(r0, a0)}Z`;
+}
+
+function renderBreakdown(){
+  const bd = BD();
+  const people = pPeople();
+  const months = monthsOf(pExpenses().slice().sort(byDateDesc)).filter(Boolean);
+  if (bd.when && !months.includes(bd.when)) bd.when = '';
+  if (bd.who && !people.includes(bd.who)) bd.who = '';
+
+  const chip = (attr, v, label, on) => `<button class="chip ${on?'on':''}" ${attr}="${esc(v)}">${esc(label)}</button>`;
+  $('#bdBy').innerHTML = [['category','Category'],['place','Place'],['payer','Who paid'],['person','Who it was for']]
+    .filter(([v]) => v !== 'place' || pCities().length > 1)
+    .map(([v,l]) => chip('data-bdby', v, l, bd.by === v)).join('');
+  const whoWrap = $('#bdWho');
+  whoWrap.style.display = whoWrap.previousElementSibling.style.display = bd.by === 'person' ? 'none' : '';
+  whoWrap.innerHTML = (GUEST() ? [] : [['', 'Everything spent']])
+    .concat(people.map(p => [p, p === PREFS.me ? `My share` : `${p}'s share`]))
+    .map(([v,l]) => chip('data-bdwho', v, l, bd.who === v)).join('');
+  $('#bdWhen').innerHTML = [['', 'All time']].concat(months.map(k => [k, monthName(k).replace(/^(\w{3})\w*/, '$1')]))
+    .map(([v,l]) => chip('data-bdwhen', v, l, bd.when === v)).join('');
+
+  const list = pExpenses().filter(e => !bd.when || monthKey(e.date) === bd.when);
+  const { rows, guessed } = breakdown(list, bd.by, bd.by === 'person' ? '' : bd.who, sharesOf);
+  const total = rows.reduce((a, r) => a + r.c, 0);
+  if (!total){
+    $('#bdChart').innerHTML = `<div class="empty"><span class="big">🥧</span>Nothing to break down for this choice.</div>`;
+    return;
+  }
+
+  const sl = slices(rows, bdOrder(bd.by));
+  const folded = new Set(rows.map(r => r.key).filter(k => !sl.some(x => x.key === k)));
+  const hlKey = BD_HL && (sl.some(x => x.key === BD_HL) ? BD_HL : folded.has(BD_HL) ? '__rest' : '');
+  const hl = hlKey ? sl.find(x => x.key === hlKey) : null;
+
+  // A donut only earns its place with three or more slices; fewer, and the list says it all.
+  let svg = '';
+  if (sl.length >= 3){
+    let a = 0;
+    const paths = sl.map(x => {
+      const a1 = a + x.c / total * Math.PI * 2;
+      const d = arcPath(100, 100, 62, 92, a, Math.min(a1, a + Math.PI * 2 - 1e-4));
+      a = a1;
+      return `<path d="${d}" fill="${bdColor(bd.by, x.key)}" stroke="var(--surface)" stroke-width="2"
+        class="${hl && hl !== x ? 'dim' : ''}" data-bdhl="${esc(x.key)}"><title>${esc(bdLabel(bd.by, x.key))}</title></path>`;
+    }).join('');
+    const mid = hl ? hl : { c: total };
+    svg = `<svg class="donut" viewBox="0 0 200 200" role="img" aria-label="Spending split by ${esc(bd.by)}">${paths}
+      <text x="100" y="96" text-anchor="middle" style="font:700 19px system-ui;fill:var(--text)">${esc(fmtAudC(mid.c))}</text>
+      <text x="100" y="117" text-anchor="middle" style="font:500 12px system-ui;fill:var(--muted)">${esc(hl ? Math.round(hl.c / total * 100) + '% · ' + bdLabel(bd.by, hl.key, true) : 'total')}</text>
+    </svg>`;
+  }
+
+  const sorted = rows.slice().sort((x, y) => y.c - x.c);
+  const what = bd.by === 'person' ? 'shares' : bd.who ? (bd.who === PREFS.me ? 'your share' : bd.who + '’s share') : 'everything spent';
+  $('#bdChart').innerHTML = `${svg}
+    <div style="font-size:12.5px;color:var(--muted);text-align:center;margin-bottom:6px">${esc(fmtAudC(total))} · ${esc(what)}${bd.when ? ' · ' + esc(monthName(bd.when)) : ''}</div>
+    ${sorted.map(r => {
+      const col = folded.has(r.key) ? 'var(--c-rest)' : bdColor(bd.by, r.key);
+      const pct = r.c / total * 100;
+      const dim = hlKey && !(r.key === hlKey || (hlKey === '__rest' && folded.has(r.key)));
+      return `<button class="bd-row${dim ? ' dim' : ''}" data-bdhl="${esc(r.key)}">
+        <span class="dot" style="background:${col}"></span>
+        <span style="font-weight:620">${esc(bdLabel(bd.by, r.key))}</span>
+        <span class="mono" style="font-weight:650">${esc(fmtAudC(r.c))} <span style="color:var(--muted);font-weight:500">${pct < 1 ? '<1' : Math.round(pct)}%</span></span>
+        <span class="bar"><i style="width:${Math.max(pct, 1).toFixed(1)}%;background:${col}"></i></span>
+      </button>`;
+    }).join('')}
+    ${bd.by === 'category' && guessed ? `<div style="font-size:12.5px;color:var(--muted);margin-top:10px">${guessed} expense${guessed > 1 ? 's have' : ' has'}
+      no category yet, so ${guessed > 1 ? 'they’re' : 'it’s'} counted by a guess from the description. Edit ${guessed > 1 ? 'them' : 'it'} to set one.</div>` : ''}`;
+}
+
 /* ---------------- months ----------------
    History and the settlement log are grouped by month, newest first. Each
    month folds on its own, or all at once. What's folded is remembered on this
@@ -1570,7 +1798,7 @@ function foldAllButton(scope, list){
   btn.style.display = months.length > 1 ? '' : 'none';
   btn.textContent = months.every(k => isFolded(scope, k)) ? 'Expand all' : 'Collapse all';
 }
-function rerenderFold(scope){ scope === 'hist' ? renderHistory() : renderSettle(); }
+function rerenderFold(scope){ scope === 'hist' ? renderHistory() : scope === 'home' ? renderHome() : renderSettle(); }
 
 /* ============================================================
    Recurring expenses and transfers
@@ -2015,7 +2243,8 @@ function newForm(){
     paid_by: (PREFS.me && pPeople().includes(PREFS.me)) ? PREFS.me : (pPeople()[0] || ''),
     split_type:'equal',
     participants: pPeople().slice(), exact:{}, percent:{},
-    items:[{ name:'', amount:'', people:pPeople().slice() }], extra:''
+    items:[{ name:'', amount:'', people:pPeople().slice() }], extra:'',
+    category:'', catPicked:false
   };
 }
 /* ------------------------------------------------------------------
@@ -2066,6 +2295,7 @@ function openEdit(id){
     id: ex.id, date: ex.date, city: ex.city, cur: ex.currency,
     rateMode: ex.currency === 'AUD' ? 'live' : 'saved', rate: savedRate, curOpen: false,
     repeat: 'never', until: '', seriesId: ruleIdOf(ex.id), fx: d.fx || null,
+    category: ex.category || '', catPicked: !!ex.category,
     amount: String(ex.amount_local), desc: ex.description, paid_by: ex.paid_by,
     split_type: ex.split_type || 'equal',
     participants: (d.participants && d.participants.length) ? d.participants.slice() : S.people.slice(),
@@ -2124,6 +2354,7 @@ function renderForm(){
   $('#exCur').textContent = F.cur;
   $('#exDesc').value = F.desc;
   $('#exDate').value = F.date;
+  renderCats();
   renderRepeat();
 
   const amtEl = $('#exAmount');
@@ -2253,6 +2484,7 @@ function draftExpense(){
     ex.split_detail = { participants: Array.from(new Set(items.flatMap(i => i.people))) };
   }
   lockFx(ex, F.fx);
+  ex.category = F.category || '';
   return ex;
 }
 const round2 = n => Math.round((Number(n)||0)*100)/100;
@@ -2314,7 +2546,8 @@ function saveExpense(){
       template: { description: ex.description, city: ex.city, paid_by: ex.paid_by, currency: ex.currency,
                   amount_local: ex.amount_local, split_type: ex.split_type,
                   // Each occurrence takes the rate of its own day, not this one's.
-                  split_detail: Object.assign({}, ex.split_detail, { fx: undefined }), items: ex.items }
+                  split_detail: Object.assign({}, ex.split_detail, { fx: undefined }), items: ex.items,
+                  category: ex.category }
     };
     // Due already: add it now under the id the backend would have used.
     if (ex.date <= today()){
@@ -2372,6 +2605,7 @@ function openDetail(id){
       <div class="split-line"><span>Date</span><b>${esc(ex.date)}</b></div>
       ${ex.city ? `<div class="split-line"><span>Place</span><b>${esc(ex.city)}</b></div>` : ''}
       <div class="split-line"><span>Paid by</span><b>${esc(ex.paid_by)}</b></div>
+      ${ex.category && catOf(ex.category) ? `<div class="split-line"><span>Category</span><b>${catOf(ex.category).icon} ${esc(catOf(ex.category).label)}</b></div>` : ''}
       <div class="split-line"><span>Split</span><b>${esc(splitLabel(ex.split_type))}</b></div>
       <div class="split-line"><span>Rate used</span><b class="mono">${rate ? esc(fmtPerAud(ex.currency, rate)) : '—'}</b></div>
     </div>
@@ -2787,6 +3021,17 @@ document.addEventListener('click', e => {
   if (e.target.id === 'addPerson'){ ensurePED(); PED.push({ orig:null, val:'' }); renderMore(); }
   if (e.target.id === 'cancelPeople'){ PED = null; renderMore(); toast('Changes discarded'); }
   if (e.target.id === 'invNew') openInvite();
+  const bt = e.target.closest('[data-cat],[data-hview],[data-bdby],[data-bdwho],[data-bdwhen],[data-bdhl]');
+  if (bt){
+    const d = bt.dataset;
+    if (d.cat){ F.category = F.category === d.cat ? '' : d.cat; F.catPicked = true; renderCats(); }
+    else if (d.hview){ PREFS.histView = d.hview; save(K_PREFS, PREFS); BD_HL = ''; renderHistory(); }
+    else if (d.bdby){ BD().by = d.bdby; BD_HL = ''; save(K_PREFS, PREFS); renderBreakdown(); }
+    else if (d.bdwho !== undefined){ BD().who = d.bdwho; BD_HL = ''; save(K_PREFS, PREFS); renderBreakdown(); }
+    else if (d.bdwhen !== undefined){ BD().when = d.bdwhen; BD_HL = ''; save(K_PREFS, PREFS); renderBreakdown(); }
+    else if (d.bdhl !== undefined){ BD_HL = BD_HL === d.bdhl ? '' : d.bdhl; renderBreakdown(); }
+    return;
+  }
   const fold = e.target.closest('[data-fold],[data-foldall]');
   if (fold){
     if (fold.dataset.fold){
@@ -2795,8 +3040,7 @@ document.addEventListener('click', e => {
       rerenderFold(scope);
     } else {
       const scope = fold.dataset.foldall;
-      const list = scope === 'hist' ? null : pSettlements();
-      const months = monthsOf(list || HIST_LIST);
+      const months = monthsOf(scope === 'hist' ? HIST_LIST : scope === 'home' ? HOME_LIST : pSettlements());
       setFolded(scope, months, !months.every(k => isFolded(scope, k)));
       rerenderFold(scope);
     }
@@ -2841,7 +3085,11 @@ document.addEventListener('input', e => {
     return;
   }
   if (el.id === 'exAmount' && F){ F.amount = el.value.replace(/[^0-9.]/g,''); renderPreview(); syncAudLine(); }
-  else if (el.id === 'exDesc' && F){ F.desc = el.value; }
+  else if (el.id === 'exDesc' && F){
+    F.desc = el.value;
+    // Until a category is tapped, it follows what the description says.
+    if (!F.catPicked){ F.category = guessCategory(F.desc); renderCats(); }
+  }
   else if (el.id === 'exDate' && F){ F.date = el.value; if (!F.id) renderRepeat(); }
   else if (el.id === 'exUntil' && F){ F.until = el.value; }
   else if (el.id === 'exExtra' && F){ F.extra = el.value.replace(/[^0-9.]/g,''); refreshItemTotals(); }
@@ -3086,6 +3334,8 @@ function applyDraft(d){
   if (d.city && pCities().includes(d.city)) F.city = d.city;
   if (d.currency) setCur(d.currency);
   F.desc         = d.description || F.desc;
+  F.category     = catOf(d.category) ? d.category : (guessCategory(F.desc) || F.category);
+  F.catPicked    = !!catOf(d.category);
   F.date         = d.date || F.date;
   F.paid_by      = S.people.includes(d.paid_by) ? d.paid_by : F.paid_by;
   F.split_type   = d.split_type || 'equal';
