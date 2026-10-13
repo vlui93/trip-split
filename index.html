@@ -153,6 +153,14 @@ select{background-image:linear-gradient(45deg,transparent 50%,var(--muted) 50%),
 .ex .t2{font-size:12.5px;color:var(--muted);margin-top:2px}
 .ex .r1{font-weight:700;font-size:15.5px;text-align:right}
 .ex .r2{font-size:12px;color:var(--muted);text-align:right;margin-top:2px}
+.month{padding-top:0;padding-bottom:0}
+.month-head{display:flex;align-items:center;gap:10px;width:100%;padding:14px 0;text-align:left;font-weight:700;font-size:15px}
+.month-sum{font-size:12.5px;color:var(--muted);font-weight:600}
+.month .chev{color:var(--faint);display:inline-block;transition:transform .15s;font-size:15px}
+.month.shut .chev{transform:rotate(-90deg)}
+.month-body{border-top:1px solid var(--line)}
+.label-row{display:flex;align-items:baseline;justify-content:space-between;gap:12px}
+.label-row .section-label{margin-bottom:8px}
 .empty{text-align:center;color:var(--muted);padding:38px 18px;font-size:14.5px;line-height:1.5}
 .empty .big{display:block;font-size:30px;margin-bottom:10px;opacity:.45}
 
@@ -300,8 +308,9 @@ body.guest .owner-only{display:none !important}
   <div class="chips" id="fCity"></div>
   <div class="section-label">Person involved</div>
   <div class="chips" id="fPerson"></div>
-  <div class="section-label">Results</div>
-  <div class="card" id="histList"></div>
+  <div class="label-row"><div class="section-label">Results</div>
+    <button class="linkbtn" data-foldall="hist" id="histFoldAll" style="display:none"></button></div>
+  <div id="histList"></div>
 </section>
 
 <!-- ============ SETTLE ============ -->
@@ -310,8 +319,9 @@ body.guest .owner-only{display:none !important}
   <p class="sub">The fewest transactions that clear every balance. Debts are chained through, so nobody pays a middleman.</p>
   <div class="card" id="transfers"></div>
   <button class="btn ghost full sm owner-only" id="newRxfer" style="margin-bottom:4px">↻ Set up a recurring transfer</button>
-  <div class="section-label">Settlement log</div>
-  <div class="card" id="settleLog"></div>
+  <div class="label-row"><div class="section-label">Settlement log</div>
+    <button class="linkbtn" data-foldall="settle" id="settleFoldAll" style="display:none"></button></div>
+  <div id="settleLog"></div>
 </section>
 
 <!-- ============ MORE ============ -->
@@ -1429,6 +1439,7 @@ function splitLabel(t){
 /* ---------------- render: history ---------------- */
 
 let HF = { city:'', person:'' };
+let HIST_LIST = [];      // what History is showing, so "Collapse all" folds exactly those months
 
 function renderHistory(){
   const cities = Array.from(new Set(pExpenses().map(e => e.city).filter(Boolean)));
@@ -1453,10 +1464,13 @@ function renderHistory(){
     return true;
   }).sort(byDateDesc);
 
+  HIST_LIST = list;
   const sum = list.reduce((a,e) => a + cents(e.amount_aud), 0);
   $('#histCount').textContent = list.length + ' · ' + fmtAudC(sum);
-  $('#histList').innerHTML = list.length ? list.map(exRow).join('')
-    : `<div class="empty"><span class="big">🔍</span>Nothing matches that filter.</div>`;
+  $('#histList').innerHTML = list.length
+    ? monthGroups('hist', list, exRow, g => g.length + ' · ' + fmtAudC(g.reduce((a,e) => a + cents(e.amount_aud), 0)))
+    : `<div class="card"><div class="empty"><span class="big">🔍</span>Nothing matches that filter.</div></div>`;
+  foldAllButton('hist', list);
 }
 
 /* ---------------- render: settle ---------------- */
@@ -1494,7 +1508,7 @@ function renderSettle(){
   window.__tx = tx;
 
   const log = pSettlements().slice().sort(byDateDesc);
-  $('#settleLog').innerHTML = log.length ? log.map(st => `
+  $('#settleLog').innerHTML = log.length ? monthGroups('settle', log, st => `
     <div class="xfer">
       <div class="ic" style="width:40px;height:40px;border-radius:11px;background:var(--surface-2);display:grid;place-items:center">✓</div>
       <div class="grow">
@@ -1505,9 +1519,58 @@ function renderSettle(){
         <div class="mono" style="font-weight:700">${st.currency && st.currency !== BASE ? fmtCur(st.amount_local, st.currency) : fmtAud(st.amount_aud)}</div>
         <button class="btn sm ghost" style="margin-top:4px" data-unsettle="${esc(st.id)}">Undo</button>
       </div>
-    </div>`).join('')
-    : `<div class="empty">Nothing settled yet.</div>`;
+    </div>`, g => g.length + ' settled')
+    : `<div class="card"><div class="empty">Nothing settled yet.</div></div>`;
+  foldAllButton('settle', log);
 }
+
+/* ---------------- months ----------------
+   History and the settlement log are grouped by month, newest first. Each
+   month folds on its own, or all at once. What's folded is remembered on this
+   phone only, per project. */
+
+const MONTH_NAMES = ['January','February','March','April','May','June','July','August','September','October','November','December'];
+const monthKey  = d => /^\d{4}-\d{2}/.test(String(d||'')) ? String(d).slice(0,7) : '';
+const monthName = k => k ? MONTH_NAMES[Number(k.slice(5,7)) - 1] + ' ' + k.slice(0,4) : 'No date';
+const foldId    = (scope, k) => scope + ':' + ((activeProject() || {}).id || '') + ':' + k;
+const isFolded  = (scope, k) => !!(PREFS.folded || {})[foldId(scope, k)];
+function setFolded(scope, keys, shut){
+  PREFS.folded = PREFS.folded || {};
+  keys.forEach(k => { if (shut) PREFS.folded[foldId(scope, k)] = 1; else delete PREFS.folded[foldId(scope, k)]; });
+  save(K_PREFS, PREFS);
+}
+function monthsOf(list){ return Array.from(new Set(list.map(x => monthKey(x.date)))); }
+
+/** `list` sorted newest first → one card per month with a header that folds it. */
+function monthGroups(scope, list, row, summary){
+  const groups = [];
+  list.forEach(x => {
+    const k = monthKey(x.date);
+    let g = groups[groups.length - 1];
+    if (!g || g.k !== k){ g = { k, items: [] }; groups.push(g); }
+    g.items.push(x);
+  });
+  return groups.map(g => {
+    const shut = isFolded(scope, g.k);
+    return `<div class="card month${shut ? ' shut' : ''}">
+      <button class="month-head" data-fold="${scope}|${g.k}" aria-expanded="${!shut}">
+        <span class="grow">${esc(monthName(g.k))}</span>
+        <span class="month-sum mono">${esc(summary(g.items))}</span>
+        <span class="chev" aria-hidden="true">⌄</span>
+      </button>
+      ${shut ? '' : `<div class="month-body">${g.items.map(row).join('')}</div>`}
+    </div>`;
+  }).join('');
+}
+
+/** "Collapse all" while anything is open, "Expand all" once everything is folded. */
+function foldAllButton(scope, list){
+  const btn = $('#' + scope + 'FoldAll');
+  const months = monthsOf(list);
+  btn.style.display = months.length > 1 ? '' : 'none';
+  btn.textContent = months.every(k => isFolded(scope, k)) ? 'Expand all' : 'Collapse all';
+}
+function rerenderFold(scope){ scope === 'hist' ? renderHistory() : renderSettle(); }
 
 /* ============================================================
    Recurring expenses and transfers
@@ -2724,6 +2787,20 @@ document.addEventListener('click', e => {
   if (e.target.id === 'addPerson'){ ensurePED(); PED.push({ orig:null, val:'' }); renderMore(); }
   if (e.target.id === 'cancelPeople'){ PED = null; renderMore(); toast('Changes discarded'); }
   if (e.target.id === 'invNew') openInvite();
+  const fold = e.target.closest('[data-fold],[data-foldall]');
+  if (fold){
+    if (fold.dataset.fold){
+      const [scope, k] = fold.dataset.fold.split('|');
+      setFolded(scope, [k], !isFolded(scope, k));
+      rerenderFold(scope);
+    } else {
+      const scope = fold.dataset.foldall;
+      const list = scope === 'hist' ? null : pSettlements();
+      const months = monthsOf(list || HIST_LIST);
+      setFolded(scope, months, !months.every(k => isFolded(scope, k)));
+      rerenderFold(scope);
+    }
+  }
   if (e.target.id === 'guestCopy'){
     navigator.clipboard.writeText(inviteLink(CFG.token)).then(() => toast('Link copied'), () => toast("Couldn't copy"));
   }
