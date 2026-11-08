@@ -8,7 +8,15 @@ function fakeSheet(name){
   let maxCols = 26;
   const cell = (r, c) => (rows[r] && rows[r][c] !== undefined) ? rows[r][c] : '';
   const put = (r, c, v) => { while (rows.length <= r) rows.push([]); rows[r][c] = v; };
+  const formats = {};                              // "r,c" → number format, so tests can tell text from numbers
+  let filter = null;
   const range = (r, c, nr = 1, nc = 1) => ({
+    getValue: () => cell(r - 1, c - 1),
+    setNumberFormat: f => { for (let i = 0; i < nr; i++) for (let j = 0; j < nc; j++) formats[(r + i) + ',' + (c + j)] = f; return range(r, c, nr, nc); },
+    setNumberFormats: fs => { fs.forEach((row, i) => row.forEach((f, j) => { formats[(r + i) + ',' + (c + j)] = f; })); return range(r, c, nr, nc); },
+    setBackground: () => range(r, c, nr, nc), setFontColor: () => range(r, c, nr, nc), setFontSize: () => range(r, c, nr, nc),
+    setDataValidation: () => range(r, c, nr, nc),
+    createFilter: () => { filter = { ref: [r, c, nr, nc], remove: () => { filter = null; } }; return filter; },
     getValues: () => Array.from({ length: nr }, (_, i) => Array.from({ length: nc }, (_, j) => cell(r - 1 + i, c - 1 + j))),
     setValues: v => { v.forEach((row, i) => row.forEach((x, j) => put(r - 1 + i, c - 1 + j, x))); return range(r, c, nr, nc); },
     setValue: v => { put(r - 1, c - 1, v); },
@@ -21,6 +29,10 @@ function fakeSheet(name){
     getRange: range, getLastRow: lastRow, getMaxColumns: () => maxCols,
     insertColumnsAfter: (_, n) => { maxCols += n; },
     setFrozenRows: () => {},
+    setColumnWidth: () => {},
+    getFilter: () => filter,
+    formats: () => formats,
+    clear: () => { rows = []; Object.keys(formats).forEach(k => delete formats[k]); },
     appendRow: v => { const r = lastRow(); v.forEach((x, j) => put(r, j, x)); },
     deleteRow: r => { rows.splice(r - 1, 1); },
   };
@@ -42,7 +54,8 @@ export function loadBackend(){
   const book = fakeBook();
   const props = {};
   const ctx = {
-    SpreadsheetApp: { getActiveSpreadsheet: () => book, getUi: () => { throw new Error('no ui'); }, openById: () => book },
+    SpreadsheetApp: { getActiveSpreadsheet: () => book, getUi: () => { throw new Error('no ui'); }, openById: () => book,
+      newDataValidation: () => { const b = { requireValueInList: () => b, requireDate: () => b, setAllowInvalid: () => b, build: () => ({}) }; return b; } },
     PropertiesService: { getScriptProperties: () => ({ getProperty: k => props[k] ?? null, setProperty: (k, v) => { props[k] = v; }, deleteProperty: k => { delete props[k]; } }) },
     LockService: { getScriptLock: () => ({ waitLock() {}, releaseLock() {} }) },
     ContentService: { MimeType: { JSON: 'json' }, createTextOutput: s => ({ s, setMimeType() { return this; } }) },

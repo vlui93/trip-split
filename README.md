@@ -197,6 +197,29 @@ Tap a slice or a row to pick it out. Expenses saved before categories existed
 are counted by a guess from their description, and the breakdown says how many.
 Edit them to set one.
 
+### Excel export and the Report tab
+
+**In the app:** History filters by place, person, category and a date range.
+**Download Excel of these results** saves exactly what's filtered as an `.xlsx`
+file. On an iPhone it opens the share sheet, so you can Save to Files, Mail or
+AirDrop it. It's built on the phone, so it works offline. The workbook has four sheets:
+
+- **Summary:** totals by category, month, place and person. Every figure is a
+  formula over the Expenses sheet.
+- **Expenses:** one row per expense, with the rate used, the AUD amount and each
+  person's share, plus a check column that should read 0. Real dates, filters on,
+  and totals that follow the filter.
+- **Settlements:** payments logged in the date range, in their own currency and in AUD.
+- **Balances:** who owes whom across the whole project, as the app works it out.
+  The filters don't apply to this sheet.
+
+**In the Sheet:** a **Report** tab has the same per-person rows for every
+project, with filters on. A **Summary** tab has totals by category, month,
+person and project. Pick a project and a date range in its yellow cells and every
+total follows. Both are rebuilt on the first sync after any change, or from the
+Sheet's **Trip Split → Rebuild Report and Summary** menu. Don't edit them by
+hand: a rebuild overwrites everything except the three picker cells.
+
 ### Settle up
 
 The app works out the fewest transfers that clear every balance by matching
@@ -350,6 +373,8 @@ shows a warning first.
 | `Settlements` | id, from, to, amount_aud, date, note, project_id, currency, amount_local |
 | `Recurring` | id, project_id, kind, frequency, start_date, end_date, generated_through, paused, template_json |
 | `Access` | token, person, project_ids, created, revoked (one row per invite link) |
+| `Report` | generated: one row per expense with each person's share (rebuilt, don't edit) |
+| `Summary` | generated: totals as formulas over Report, driven by a project and date picker |
 
 `rate_to_aud` is AUD per one unit of the currency; the app shows the inverse.
 
@@ -404,6 +429,6 @@ no rows.
 |---|---|
 | `index.html` | The whole frontend: markup, styles and logic |
 | `Code.gs` | Apps Script backend |
-| `tests/` | `node tests/<name>.test.mjs`: receipt parsing, the currency ledger, categories and the breakdown, and invite access control (runs `Code.gs` against a fake Sheet in `fake-gas.mjs`) |
+| `tests/` | `node tests/<name>.test.mjs`: receipt parsing, the currency ledger, categories and the breakdown, the Excel export, the Report tab, and invite access control (runs `Code.gs` against a fake Sheet in `fake-gas.mjs`) |
 | `manifest.webmanifest` | Web app manifest |
 | `icon-*-v2.png`, `mkicon.py`, `icon.svg` | Home-screen icons and the script that generates them |

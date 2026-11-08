@@ -335,6 +335,16 @@ body.guest .owner-only{display:none !important}
   <div class="chips" id="fCity"></div>
   <div class="section-label">Person involved</div>
   <div class="chips" id="fPerson"></div>
+  <div class="section-label">Category</div>
+  <div class="chips" id="fCat"></div>
+  <div class="section-label">Dates</div>
+  <div class="row" style="gap:8px">
+    <input type="date" id="fFrom" class="grow" aria-label="From" style="min-width:0">
+    <span style="color:var(--muted);font-size:14px">to</span>
+    <input type="date" id="fTo" class="grow" aria-label="To" style="min-width:0">
+    <button class="iconbtn" id="fDatesClear" title="Clear dates" style="display:none">×</button>
+  </div>
+  <button class="btn ghost full sm" id="xlsxBtn" style="margin-top:14px">⬇ Download Excel of these results</button>
   <div class="label-row"><div class="section-label">Results</div>
     <button class="linkbtn" data-foldall="hist" id="histFoldAll" style="display:none"></button></div>
   <div id="histList"></div>
@@ -1475,7 +1485,7 @@ function splitLabel(t){
 
 /* ---------------- render: history ---------------- */
 
-let HF = { city:'', person:'' };
+let HF = { city:'', person:'', cat:'', from:'', to:'' };
 let HIST_LIST = [];
 let HOME_LIST = [];      // what History is showing, so "Collapse all" folds exactly those months
 
@@ -1497,15 +1507,12 @@ function renderHistory(){
   $('#fPerson').innerHTML = [['','Everyone']].concat(pPeople().map(p => [p,p]))
     .map(([v,l]) => `<button class="chip ${HF.person===v?'on':''}" data-fp="${esc(v)}">${esc(l)}</button>`).join('');
 
-  const list = pExpenses().filter(ex => {
-    if (HF.city && ex.city !== HF.city) return false;
-    if (HF.person){
-      if (ex.paid_by === HF.person) return true;
-      const sh = sharesOf(ex);
-      return (sh[HF.person] || 0) > 0;
-    }
-    return true;
-  }).sort(byDateDesc);
+  $('#fCat').innerHTML = [['','All'], ...CATS.map(c => [c.id, c.icon + ' ' + c.label]), ['none','Not set']]
+    .map(([v,l]) => `<button class="chip ${HF.cat===v?'on':''}" data-fcat="${esc(v)}">${esc(l)}</button>`).join('');
+  $('#fFrom').value = HF.from; $('#fTo').value = HF.to;
+  $('#fDatesClear').style.display = HF.from || HF.to ? '' : 'none';
+
+  const list = histFiltered().sort(byDateDesc);
 
   HIST_LIST = list;
   const sum = list.reduce((a,e) => a + cents(e.amount_aud), 0);
@@ -1514,6 +1521,67 @@ function renderHistory(){
     ? monthGroups('hist', list, exRow, g => g.length + ' · ' + fmtAudC(g.reduce((a,e) => a + cents(e.amount_aud), 0)))
     : `<div class="card"><div class="empty"><span class="big">🔍</span>Nothing matches that filter.</div></div>`;
   foldAllButton('hist', list);
+}
+
+/** History's filters: place, person involved, category and a date range (inclusive). */
+function inDates(d){ return (!HF.from || d >= HF.from) && (!HF.to || d <= HF.to); }
+function histFiltered(){
+  return pExpenses().filter(ex => {
+    if (!inDates(ex.date)) return false;
+    if (HF.cat === 'none' ? ex.category : HF.cat && ex.category !== HF.cat) return false;
+    if (HF.city && ex.city !== HF.city) return false;
+    if (HF.person){
+      if (ex.paid_by === HF.person) return true;
+      const sh = sharesOf(ex);
+      return (sh[HF.person] || 0) > 0;
+    }
+    return true;
+  });
+}
+
+/** What the filters say, in words, for the top of the export. */
+function filterNote(){
+  const bits = [];
+  if (HF.from || HF.to) bits.push((HF.from || 'start') + ' to ' + (HF.to || 'today'));
+  if (HF.city) bits.push(HF.city);
+  if (HF.person) bits.push('involving ' + HF.person);
+  if (HF.cat) bits.push(HF.cat === 'none' ? 'no category' : catOf(HF.cat).label);
+  return bits.length ? 'Filtered: ' + bits.join(' · ') : 'All expenses in this project';
+}
+
+/** Build the workbook from what History shows, then share or download it. */
+async function exportExcel(){
+  const p = activeProject();
+  const list = histFiltered().sort((a, b) => String(a.date).localeCompare(String(b.date)) || String(a.id).localeCompare(String(b.id)));
+  if (!list.length){ toast('Nothing to export with these filters'); return; }
+  // Everyone the rows mention, project members first — someone since removed still gets a column.
+  const people = pPeople().slice();
+  list.forEach(ex => [ex.paid_by].concat(Object.keys(sharesOf(ex))).forEach(n => { if (n && !people.includes(n)) people.push(n); }));
+  const sets = pSettlements().filter(st => inDates(st.date) && (!HF.person || st.from === HF.person || st.to === HF.person))
+    .sort((a, b) => String(a.date).localeCompare(String(b.date)));
+  const L = ledger();
+  const g = GUEST();
+  const wb = exportWorkbook({
+    title: 'Trip Split — ' + (p ? p.name : 'Expenses'),
+    filterNote: filterNote(), exportedOn: today(), people,
+    expenses: list, settlements: sets, shares: sharesOf,
+    catLabel: c => catOf(c) ? catOf(c).label : 'Not set', splitLabel,
+    // A guest's phone only has their own expenses, so only their own debts are whole.
+    ledger: { pool: g ? {} : L.pool, transfers: transfers(L) },
+  });
+  const name = ['Trip Split', p ? p.name : '', HF.from || HF.to ? (HF.from || 'start') + ' to ' + (HF.to || today()) : today()]
+    .filter(Boolean).join(' - ').replace(/[\\/:*?"<>|]/g, '') + '.xlsx';
+  const file = new File([xlsxBuild(wb)], name, { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
+  // On an iPhone the share sheet is the dependable way out of a home-screen app: Save to Files, Mail, AirDrop.
+  if (navigator.canShare && navigator.canShare({ files: [file] })){
+    try { await navigator.share({ files: [file], title: name }); return; }
+    catch(e){ if (e && e.name === 'AbortError') return; }
+  }
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(file); a.download = name;
+  document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(a.href), 4000);
+  toast('Excel file saved');
 }
 
 /* ---------------- render: settle ---------------- */
@@ -1566,6 +1634,233 @@ function renderSettle(){
     : `<div class="card"><div class="empty">Nothing settled yet.</div></div>`;
   foldAllButton('settle', log);
 }
+
+/* ---------------- Excel export ----------------
+   A real .xlsx built on the phone, so it works offline and needs no library:
+   an .xlsx is a zip of a few XML files. Totals are formulas over the rows
+   (SUBTOTAL, so they follow Excel's filters) with their values filled in too,
+   so the numbers show even in viewers that don't calculate. */
+
+/* xlsx:start — pure functions, exercised by tests/export.test.mjs */
+const XL_STYLE = { head: 1, money: 2, rate: 3, date: 4, tmoney: 5, bold: 6, pct: 7, title: 8, muted: 9 };
+
+function xlCol(i){ let s = ''; for (i++; i > 0; i = Math.floor((i - 1) / 26)) s = String.fromCharCode(65 + (i - 1) % 26) + s; return s; }
+function xlEsc(s){
+  return String(s).replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f]/g, '')
+    .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+}
+/** 'YYYY-MM-DD' → Excel's day number, so dates sort, filter and group as dates. */
+function xlDate(d){
+  const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(String(d || ''));
+  return m ? (Date.UTC(+m[1], +m[2] - 1, +m[3]) - Date.UTC(1899, 11, 30)) / 864e5 : null;
+}
+
+function xlSheet(sh){
+  const rows = sh.rows.map((row, r) => `<row r="${r + 1}">${row.map((cell, c) => {
+    if (cell === null || cell === undefined || cell === '') return '';
+    const o = (typeof cell === 'object') ? cell : { v: cell };
+    const ref = xlCol(c) + (r + 1);
+    const s = o.s ? ` s="${XL_STYLE[o.s]}"` : '';
+    let v = o.v;
+    if (o.s === 'date' && typeof v === 'string') v = xlDate(v);
+    const f = o.f ? `<f>${xlEsc(o.f)}</f>` : '';
+    if (typeof v === 'number' && isFinite(v)) return `<c r="${ref}"${s}>${f}<v>${v}</v></c>`;
+    if (o.f) return `<c r="${ref}"${s} t="str">${f}<v>${xlEsc(v == null ? '' : v)}</v></c>`;
+    return `<c r="${ref}"${s} t="inlineStr"><is><t xml:space="preserve">${xlEsc(v)}</t></is></c>`;
+  }).join('')}</row>`).join('');
+  const pane = sh.freeze ? `<sheetViews><sheetView workbookViewId="0"><pane ySplit="${sh.freeze}" topLeftCell="A${sh.freeze + 1}" activePane="bottomLeft" state="frozen"/></sheetView></sheetViews>`
+                         : `<sheetViews><sheetView workbookViewId="0"/></sheetViews>`;
+  const cols = sh.cols ? `<cols>${sh.cols.map((w, i) => `<col min="${i + 1}" max="${i + 1}" width="${w}" customWidth="1"/>`).join('')}</cols>` : '';
+  const filter = sh.filter ? `<autoFilter ref="${sh.filter}"/>` : '';
+  return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">${pane}${cols}<sheetData>${rows}</sheetData>${filter}</worksheet>`;
+}
+
+const XL_STYLES = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
+<numFmts count="4"><numFmt numFmtId="164" formatCode="#,##0.00"/><numFmt numFmtId="165" formatCode="0.0000"/><numFmt numFmtId="166" formatCode="yyyy-mm-dd"/><numFmt numFmtId="167" formatCode="0.0%"/></numFmts>
+<fonts count="4"><font><sz val="11"/><name val="Calibri"/></font><font><b/><sz val="11"/><name val="Calibri"/></font><font><b/><sz val="14"/><name val="Calibri"/></font><font><sz val="10"/><color rgb="FF6B7280"/><name val="Calibri"/></font></fonts>
+<fills count="3"><fill><patternFill patternType="none"/></fill><fill><patternFill patternType="gray125"/></fill><fill><patternFill patternType="solid"><fgColor rgb="FFEEF1F6"/><bgColor indexed="64"/></patternFill></fill></fills>
+<borders count="2"><border><left/><right/><top/><bottom/><diagonal/></border><border><left/><right/><top style="thin"><color rgb="FF9CA3AF"/></top><bottom/><diagonal/></border></borders>
+<cellStyleXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/></cellStyleXfs>
+<cellXfs count="10">
+<xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0"/>
+<xf numFmtId="0" fontId="1" fillId="2" borderId="0" xfId="0" applyFont="1" applyFill="1"/>
+<xf numFmtId="164" fontId="0" fillId="0" borderId="0" xfId="0" applyNumberFormat="1"/>
+<xf numFmtId="165" fontId="0" fillId="0" borderId="0" xfId="0" applyNumberFormat="1"/>
+<xf numFmtId="166" fontId="0" fillId="0" borderId="0" xfId="0" applyNumberFormat="1"/>
+<xf numFmtId="164" fontId="1" fillId="0" borderId="1" xfId="0" applyNumberFormat="1" applyFont="1" applyBorder="1"/>
+<xf numFmtId="0" fontId="1" fillId="0" borderId="0" xfId="0" applyFont="1"/>
+<xf numFmtId="167" fontId="0" fillId="0" borderId="0" xfId="0" applyNumberFormat="1"/>
+<xf numFmtId="0" fontId="2" fillId="0" borderId="0" xfId="0" applyFont="1"/>
+<xf numFmtId="0" fontId="3" fillId="0" borderId="0" xfId="0" applyFont="1"/>
+</cellXfs>
+<cellStyles count="1"><cellStyle name="Normal" xfId="0" builtinId="0"/></cellStyles>
+</styleSheet>`;
+
+const XL_CRC = (() => { const t = new Uint32Array(256);
+  for (let n = 0; n < 256; n++){ let c = n; for (let k = 0; k < 8; k++) c = c & 1 ? 0xEDB88320 ^ (c >>> 1) : c >>> 1; t[n] = c >>> 0; }
+  return t; })();
+function xlCrc(b){ let c = 0xFFFFFFFF; for (let i = 0; i < b.length; i++) c = XL_CRC[(c ^ b[i]) & 255] ^ (c >>> 8); return (c ^ 0xFFFFFFFF) >>> 0; }
+
+/** A stored (uncompressed) zip. Spreadsheets of a few hundred rows stay small anyway. */
+function xlZip(files){
+  const enc = new TextEncoder(), parts = [], dir = [];
+  let off = 0;
+  const u16 = n => [n & 255, (n >>> 8) & 255], u32 = n => [n & 255, (n >>> 8) & 255, (n >>> 16) & 255, (n >>> 24) & 255];
+  files.forEach(([name, text]) => {
+    const nm = enc.encode(name), data = enc.encode(text), crc = xlCrc(data);
+    const common = [...u16(20), ...u16(0x0800), ...u16(0), ...u16(0), ...u16(0x21), ...u32(crc), ...u32(data.length), ...u32(data.length), ...u16(nm.length)];
+    const local = new Uint8Array([...u32(0x04034b50), ...common, ...u16(0)]);
+    parts.push(local, nm, data);
+    dir.push(new Uint8Array([...u32(0x02014b50), ...u16(20), ...common, ...u16(0), ...u16(0), ...u16(0), ...u16(0), ...u32(0), ...u32(off)]), nm);
+    off += local.length + nm.length + data.length;
+  });
+  const dirLen = dir.reduce((a, p) => a + p.length, 0);
+  const end = new Uint8Array([...u32(0x06054b50), ...u16(0), ...u16(0), ...u16(files.length), ...u16(files.length), ...u32(dirLen), ...u32(off), ...u16(0)]);
+  const all = parts.concat(dir, [end]);
+  const out = new Uint8Array(all.reduce((a, p) => a + p.length, 0));
+  let i = 0; all.forEach(p => { out.set(p, i); i += p.length; });
+  return out;
+}
+
+/** sheets: [{ name, rows, cols?, freeze?, filter? }] → .xlsx bytes. */
+function xlsxBuild(sheets){
+  const names = sheets.map(s => s.name.replace(/[\[\]:*?\/\\]/g, ' ').slice(0, 31));
+  const filters = sheets.map((s, i) => s.filter
+    ? `<definedName name="_xlnm._FilterDatabase" localSheetId="${i}" hidden="1">'${names[i].replace(/'/g, "''")}'!$${s.filter.replace(/([A-Z]+)(\d+)/g, '$1$$$2').replace(':', ':$')}</definedName>` : '').join('');
+  const files = [
+    ['[Content_Types].xml', `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/><Override PartName="/xl/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"/>${sheets.map((s, i) => `<Override PartName="/xl/worksheets/sheet${i + 1}.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>`).join('')}</Types>`],
+    ['_rels/.rels', `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/></Relationships>`],
+    ['xl/workbook.xml', `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets>${names.map((n, i) => `<sheet name="${xlEsc(n)}" sheetId="${i + 1}" r:id="rId${i + 1}"/>`).join('')}</sheets>${filters ? `<definedNames>${filters}</definedNames>` : ''}<calcPr calcId="191029" fullCalcOnLoad="1"/></workbook>`],
+    ['xl/_rels/workbook.xml.rels', `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">${sheets.map((s, i) => `<Relationship Id="rId${i + 1}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet${i + 1}.xml"/>`).join('')}<Relationship Id="rId${sheets.length + 1}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/></Relationships>`],
+    ['xl/styles.xml', XL_STYLES],
+  ].concat(sheets.map((s, i) => [`xl/worksheets/sheet${i + 1}.xml`, xlSheet(s)]));
+  return xlZip(files);
+}
+
+/**
+ * The workbook for an export. Everything it needs is passed in, so it can be
+ * tested away from the page.
+ *   d: { title, filterNote, exportedOn, people, expenses (sorted), settlements,
+ *        shares(ex) → AUD cents, catLabel(id), splitLabel(type), ledger: { pool, pairs, transfers } }
+ */
+function exportWorkbook(d){
+  const r2 = c => Math.round(c) / 100;
+  const people = d.people;
+  const n = d.expenses.length;
+  const last = n + 1;                                  // last data row
+  const K = 'K';                                       // the AUD column
+  const shareCol = i => xlCol(11 + i);
+  const totalCol = xlCol(11 + people.length), checkCol = xlCol(12 + people.length);
+  const head = h => ({ v: h, s: 'head' });
+  const rng = (col, sheet) => `${sheet ? sheet + '!' : ''}$${col}$2:$${col}$${Math.max(last, 2)}`;
+
+  // ---- Expenses: one row each, every person's share, and a check that the shares add up.
+  const exRows = [[head('Date'), head('Month'), head('Place'), head('Category'), head('Description'), head('Paid by'),
+    head('Split'), head('Currency'), head('Amount'), head('Rate (per 1 AUD)'), head('Amount (AUD)')]
+    .concat(people.map(p => head('Share: ' + p)), [head('Shares total'), head('Check'), head('ID')])];
+  const sums = { aud: 0, per: people.map(() => 0) };
+  d.expenses.forEach((ex, i) => {
+    const r = i + 2, sh = d.shares(ex), aud = Math.round((Number(ex.amount_aud) || 0) * 100);
+    const shareC = people.map(p => sh[p] || 0);
+    const tot = shareC.reduce((a, c) => a + c, 0);
+    sums.aud += aud; shareC.forEach((c, j) => sums.per[j] += c);
+    const rate = ex.currency === 'AUD' ? 1 : (ex.amount_aud > 0 ? ex.amount_local / ex.amount_aud : 0);
+    exRows.push([{ v: ex.date, s: 'date' }, String(ex.date || '').slice(0, 7), ex.city || '', d.catLabel(ex.category),
+      ex.description || '', ex.paid_by, d.splitLabel(ex.split_type), ex.currency,
+      { v: Number(ex.amount_local) || 0, s: 'money' }, { v: Math.round(rate * 1e4) / 1e4, s: 'rate' }, { v: r2(aud), s: 'money' }]
+      .concat(shareC.map(c => ({ v: r2(c), s: 'money' })),
+        [{ v: r2(tot), s: 'money', f: `SUM(${shareCol(0)}${r}:${shareCol(people.length - 1)}${r})` },
+         { v: r2(aud - tot), s: 'money', f: `ROUND(${K}${r}-${totalCol}${r},2)` }, ex.id]));
+  });
+  const tr = last + 2;                                  // a blank row, then totals that follow the filter
+  const sub = (col, c) => ({ v: r2(c), s: 'tmoney', f: `SUBTOTAL(109,${col}2:${col}${last})` });
+  exRows.push([]);
+  exRows.push([{ v: 'Total (rows shown)', s: 'bold' }, '', '', '', '', '', '', '', '', '', sub(K, sums.aud)]
+    .concat(people.map((p, j) => sub(shareCol(j), sums.per[j])), [sub(totalCol, sums.per.reduce((a, c) => a + c, 0))]));
+  const lastCol = xlCol(13 + people.length);
+
+  // ---- Settlements
+  const st = d.settlements;
+  const sLast = st.length + 1;
+  const stRows = [[head('Date'), head('Month'), head('From'), head('To'), head('Currency'), head('Amount'), head('Amount (AUD)'), head('Note'), head('ID')]];
+  let stAud = 0;
+  st.forEach(s => {
+    const aud = Math.round((Number(s.amount_aud) || 0) * 100); stAud += aud;
+    stRows.push([{ v: s.date, s: 'date' }, String(s.date || '').slice(0, 7), s.from, s.to, s.currency || 'AUD',
+      { v: Number(s.currency && s.currency !== 'AUD' ? s.amount_local : s.amount_aud) || 0, s: 'money' }, { v: r2(aud), s: 'money' }, s.note || '', s.id]);
+  });
+  stRows.push([]);
+  stRows.push([{ v: 'Total in AUD (rows shown)', s: 'bold' }, '', '', '', '', '', { v: r2(stAud), s: 'tmoney', f: `SUBTOTAL(109,G2:G${Math.max(sLast, 2)})` }]);
+
+  // ---- Summary: formulas over the Expenses sheet, with their values filled in.
+  const E = "'Expenses'";
+  const sm = [[{ v: d.title, s: 'title' }], [{ v: d.filterNote, s: 'muted' }],
+    [{ v: `Exported ${d.exportedOn}. Amounts in AUD at each expense's own rate. Every figure below is a formula over the Expenses sheet.`, s: 'muted' }], []];
+  let totalRef = '';
+  const table = (label, keys, keyCol, valueOf, critOf) => {
+    sm.push([{ v: label, s: 'bold' }]);
+    sm.push([head(label.replace(/^By /, '').replace(/^\w/, c => c.toUpperCase())), head('Spent (AUD)'), head('Share of total')]);
+    const top = sm.length + 1;
+    keys.forEach((k, i) => {
+      const row = sm.length + 1, c = valueOf(k);
+      sm.push([k, { v: r2(c), s: 'money', f: `SUMIFS(${rng(K, E)},${rng(keyCol, E)},${critOf ? critOf(row) : '$A' + row})` },
+        { v: sums.aud ? c / sums.aud : 0, s: 'pct', f: `IF(${totalRef}=0,0,B${row}/${totalRef})` }]);
+    });
+    sm.push([{ v: 'Total', s: 'bold' }, { v: r2(keys.reduce((a, k) => a + valueOf(k), 0)), s: 'tmoney', f: `SUM(B${top}:B${sm.length})` }]);
+    sm.push([]);
+  };
+  totalRef = '$B$' + (sm.length + 1);
+  sm.push([{ v: 'Total spent', s: 'bold' }, { v: r2(sums.aud), s: 'tmoney', f: `SUM(${rng(K, E)})` }, { v: `${n} expense${n === 1 ? '' : 's'}`, s: 'muted' }]);
+  sm.push([]);
+  const by = (field) => { const m = {}; d.expenses.forEach(ex => { const k = field(ex); m[k] = (m[k] || 0) + Math.round((Number(ex.amount_aud) || 0) * 100); }); return m; };
+  const cat = by(ex => d.catLabel(ex.category));
+  table('By category', Object.keys(cat).sort((a, b) => cat[b] - cat[a]), 'D', k => cat[k]);
+  const mon = by(ex => String(ex.date || '').slice(0, 7));
+  table('By month', Object.keys(mon).sort(), 'B', k => mon[k]);
+  const plc = by(ex => ex.city || '');
+  if (Object.keys(plc).length > 1) table('By place', Object.keys(plc).sort((a, b) => plc[b] - plc[a]), 'C', k => plc[k]);
+
+  sm.push([{ v: 'By person', s: 'bold' }]);
+  sm.push([head('Person'), head('Paid (AUD)'), head('Their share (AUD)'), head('Paid − share')]);
+  people.forEach((p, j) => {
+    const row = sm.length + 1;
+    const paid = d.expenses.filter(ex => ex.paid_by === p).reduce((a, ex) => a + Math.round((Number(ex.amount_aud) || 0) * 100), 0);
+    sm.push([p, { v: r2(paid), s: 'money', f: `SUMIFS(${rng(K, E)},${rng('F', E)},$A${row})` },
+      { v: r2(sums.per[j]), s: 'money', f: `SUM(${rng(shareCol(j), E)})` },
+      { v: r2(paid - sums.per[j]), s: 'money', f: `B${row}-C${row}` }]);
+  });
+  sm.push([{ v: 'Paid − share is before settlements and per-person currencies. The Balances sheet has what is actually owed.', s: 'muted' }]);
+
+  // ---- Balances: the app's own figures for the whole project, not the filtered rows.
+  const bl = [[{ v: 'Balances', s: 'title' }],
+    [{ v: `The whole project as of ${d.exportedOn}, whatever the export filters. As the app works them out, including settlements.`, s: 'muted' }], []];
+  const pool = Object.keys(d.ledger.pool).filter(k => d.ledger.pool[k]);
+  if (pool.length){
+    bl.push([{ v: 'Shared AUD pool', s: 'bold' }]);
+    bl.push([head('Person'), head('Net (AUD)'), head('')]);
+    pool.forEach(p => { const c = d.ledger.pool[p]; bl.push([p, { v: r2(c), s: 'money' }, c > 0 ? 'is owed' : 'owes']); });
+    bl.push([]);
+  }
+  bl.push([{ v: 'Transfers that settle up', s: 'bold' }]);
+  bl.push([head('From'), head('To'), head('Currency'), head('Amount')]);
+  d.ledger.transfers.forEach(t => bl.push([t.from, t.to, t.cur, { v: r2(t.c), s: 'money' }]));
+  if (!d.ledger.transfers.length) bl.push(['Everyone is square.']);
+
+  return [
+    { name: 'Summary', rows: sm, cols: [30, 16, 18, 16] },
+    { name: 'Expenses', rows: exRows, freeze: 1, filter: `A1:${lastCol}${Math.max(last, 2)}`,
+      cols: [11, 9, 13, 15, 30, 11, 9, 9, 12, 14, 13].concat(people.map(() => 13), [13, 9, 20]) },
+    { name: 'Settlements', rows: stRows, freeze: 1, filter: `A1:I${Math.max(sLast, 2)}`, cols: [11, 9, 12, 12, 9, 12, 13, 24, 20] },
+    { name: 'Balances', rows: bl, cols: [18, 16, 12, 14] },
+  ];
+}
+/* xlsx:end */
 
 /* ---------------- categories and the spending breakdown ---------------- */
 
@@ -3021,6 +3316,10 @@ document.addEventListener('click', e => {
   if (e.target.id === 'addPerson'){ ensurePED(); PED.push({ orig:null, val:'' }); renderMore(); }
   if (e.target.id === 'cancelPeople'){ PED = null; renderMore(); toast('Changes discarded'); }
   if (e.target.id === 'invNew') openInvite();
+  const fc = e.target.closest('[data-fcat]');
+  if (fc){ HF.cat = fc.dataset.fcat; renderHistory(); return; }
+  if (e.target.id === 'fDatesClear'){ HF.from = HF.to = ''; renderHistory(); return; }
+  if (e.target.closest('#xlsxBtn')){ exportExcel(); return; }
   const bt = e.target.closest('[data-cat],[data-hview],[data-bdby],[data-bdwho],[data-bdwhen],[data-bdhl]');
   if (bt){
     const d = bt.dataset;
@@ -3066,6 +3365,11 @@ document.addEventListener('click', e => {
 
 document.addEventListener('change', e => {
   const el = e.target;
+  if ((el.id === 'fFrom' || el.id === 'fTo') && HF[el.id === 'fFrom' ? 'from' : 'to'] !== el.value){
+    HF[el.id === 'fFrom' ? 'from' : 'to'] = el.value;      // iOS date pickers report on change, not input
+    if (HF.from && HF.to && HF.from > HF.to) HF[el.id === 'fFrom' ? 'to' : 'from'] = el.value;
+    renderHistory();
+  }
   if (el.dataset && el.dataset.pcur !== undefined){
     const name = el.dataset.pcur, cur = el.value;
     S.personCur = S.personCur || {};
@@ -3105,6 +3409,11 @@ document.addEventListener('input', e => {
     if (av && av.classList.contains('av')) av.textContent = initials(el.value) || '?';
   }
   else if (el.id === 'invName' && INV){ INV.newName = el.value; }
+  else if (el.id === 'fFrom' || el.id === 'fTo'){
+    HF[el.id === 'fFrom' ? 'from' : 'to'] = el.value;
+    if (HF.from && HF.to && HF.from > HF.to) HF[el.id === 'fFrom' ? 'to' : 'from'] = el.value;
+    renderHistory();
+  }
   else if (el.dataset.iname !== undefined && F){ F.items[Number(el.dataset.iname)].name = el.value; }
   else if (el.dataset.iamt !== undefined && F){
     F.items[Number(el.dataset.iamt)].amount = el.value.replace(/[^0-9.]/g,'');
