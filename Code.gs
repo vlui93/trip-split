@@ -257,6 +257,7 @@ function handle(e, req) {
 
     if (!who.owner) {
       out = guestAction(who, action, payload, req);
+      afterRequest(action);
       out.ok = true;
       return json(out);
     }
@@ -285,6 +286,7 @@ function handle(e, req) {
       case 'deleteSettlement': out = { id: deleteSettlement(payload.id) }; break;
       default: return json({ ok: false, error: 'Unknown action: ' + action });
     }
+    afterRequest(action);
     out.ok = true;
     return json(out);
   } catch (err) {
@@ -743,7 +745,7 @@ function materializeRecurring(rateList) {
     }
   });
 
-  if (made) Logger.log('Created ' + made + ' recurring occurrence(s).');
+  if (made) { Logger.log('Created ' + made + ' recurring occurrence(s).'); markReportDirty(); }
   return made;
 }
 
@@ -885,6 +887,244 @@ function deleteSettlement(id) {
   if (r < 0) return id;                    // already gone
   sheet(SHEET_SETTLEMENTS).deleteRow(r);
   return id;
+}
+
+/* ------------------------------------------------------------------ *
+ * Report and Summary tabs — an auditable view of the spending in the Sheet
+ *
+ * Report: one row per expense across every project, with each person's
+ * share in AUD worked out exactly as the app does, and filters switched on.
+ * Summary: totals by project, category, month and person, all formulas over
+ * Report, driven by a project picker and a date range at the top.
+ *
+ * Both are rebuilt on the first sync after anything changes (a write marks
+ * them stale), or from the Trip Split menu in the Sheet. They're outputs:
+ * edits to them are overwritten, apart from the Summary's three picker cells.
+ * ------------------------------------------------------------------ */
+
+var SHEET_REPORT  = 'Report';
+var SHEET_SUMMARY = 'Summary';
+var CAT_LABELS = { food: 'Food & drink', transport: 'Transport', stay: 'Stay', activities: 'Activities',
+                   shopping: 'Shopping', groceries: 'Groceries', bills: 'Bills', other: 'Other' };
+var SPLIT_LABELS = { equal: 'equal', exact: 'exact', percent: '%', itemized: 'itemized' };
+
+function onOpen() {
+  try {
+    SpreadsheetApp.getUi().createMenu('Trip Split')
+      .addItem('Rebuild Report and Summary', 'rebuildReport').addToUi();
+  } catch (e) { /* opened without a UI */ }
+}
+
+function markReportDirty() {
+  PropertiesService.getScriptProperties().setProperty('REPORT_DIRTY', '1');
+}
+
+/** Writes mark the report stale; the next sync rebuilds it. A failure never fails the sync. */
+function afterRequest(action) {
+  if (action === 'bootstrap') {
+    var props = PropertiesService.getScriptProperties();
+    if (props.getProperty('REPORT_DIRTY') !== '1') return;
+    try { rebuildReport(); props.deleteProperty('REPORT_DIRTY'); }
+    catch (err) { Logger.log('Report rebuild failed: ' + err); }
+  } else if (['aiStatus', 'parseReceipt', 'parseText'].indexOf(action) < 0) {
+    markReportDirty();
+  }
+}
+
+/** Split totalC cents by weights so the parts sum exactly — the app's allocate(), line for line. */
+function allocateCents(totalC, weights) {
+  var names = Object.keys(weights).filter(function (n) { return Number(weights[n]) > 0; });
+  var out = {};
+  if (!names.length) {
+    var all = Object.keys(weights);
+    if (!all.length) return out;
+    var base = Math.floor(totalC / all.length);
+    all.forEach(function (n, i) { out[n] = base + (i < totalC - base * all.length ? 1 : 0); });
+    return out;
+  }
+  var sum = names.reduce(function (a, n) { return a + Number(weights[n]); }, 0);
+  var used = 0, frac = [];
+  names.forEach(function (n) {
+    var raw = Number(weights[n]) / sum * totalC, fl = Math.floor(raw);
+    out[n] = fl; used += fl; frac.push([n, raw - fl]);
+  });
+  frac.sort(function (a, b) { return b[1] - a[1]; });
+  for (var i = 0, left = totalC - used; left > 0; i++, left--) out[frac[i % frac.length][0]]++;
+  return out;
+}
+
+/** Each person's share of an expense in AUD cents — the app's sharesOf(), line for line. */
+function shareCents(ex, people) {
+  var totalC = Math.round((Number(ex.amount_aud) || 0) * 100);
+  var d = ex.split_detail || {}, weights = {};
+  if (ex.split_type === 'exact' || ex.split_type === 'percent') {
+    var sh = d.shares || {};
+    Object.keys(sh).forEach(function (n) { if (Number(sh[n]) > 0) weights[n] = Number(sh[n]); });
+  } else if (ex.split_type === 'itemized') {
+    var pack = ex.items || {}, items = pack.items || [], per = {}, itemsTotal = 0;
+    items.forEach(function (it) {
+      var amt = Number(it.amount) || 0, who = (it.people || []).filter(Boolean);
+      if (!amt || !who.length) return;
+      itemsTotal += amt;
+      who.forEach(function (n) { per[n] = (per[n] || 0) + amt / who.length; });
+    });
+    var extra = Number(pack.extra) || 0;
+    if (extra && itemsTotal > 0) {
+      Object.keys(per).forEach(function (n) { per[n] += extra * (per[n] / itemsTotal); });
+    } else if (extra) {
+      var w = Object.keys(per).length ? Object.keys(per) : people;
+      w.forEach(function (n) { per[n] = (per[n] || 0) + extra / w.length; });
+    }
+    weights = per;
+  } else {
+    var parts = (d.participants && d.participants.length) ? d.participants : people;
+    parts.forEach(function (n) { weights[n] = 1; });
+  }
+  if (!Object.keys(weights).length) people.forEach(function (n) { weights[n] = 1; });
+  return allocateCents(totalC, weights);
+}
+
+function colLetter(i) {
+  var s = '';
+  for (i++; i > 0; i = Math.floor((i - 1) / 26)) s = String.fromCharCode(65 + (i - 1) % 26) + s;
+  return s;
+}
+
+function freshTab(name) {
+  var ss = book(), sh = ss.getSheetByName(name);
+  if (!sh) sh = ss.insertSheet(name);
+  var f = sh.getFilter && sh.getFilter();
+  if (f) f.remove();
+  sh.clear();
+  return sh;
+}
+
+function rebuildReport() {
+  var projects = getProjects(), byId = {};
+  projects.forEach(function (p) { byId[p.id] = p; });
+  var everyone = getPeople();
+  var expenses = getExpenses().slice().sort(function (a, b) {
+    return String(a.date).localeCompare(String(b.date)) || String(a.id).localeCompare(String(b.id));
+  });
+
+  // Everyone with a share somewhere gets a column, in People order; removed people last.
+  var shares = expenses.map(function (ex) {
+    var p = byId[ex.project_id];
+    var members = (p && p.members && p.members.length) ? p.members.filter(function (n) { return everyone.indexOf(n) >= 0; }) : everyone;
+    return shareCents(ex, members.length ? members : everyone);
+  });
+  var people = everyone.slice();
+  expenses.forEach(function (ex, i) {
+    [ex.paid_by].concat(Object.keys(shares[i])).forEach(function (n) { if (n && people.indexOf(n) < 0) people.push(n); });
+  });
+
+  var head = ['Date', 'Month', 'Project', 'Place', 'Category', 'Description', 'Paid by', 'Split', 'Currency',
+              'Amount', 'Rate (per 1 AUD)', 'Amount (AUD)']
+    .concat(people.map(function (p) { return 'Share: ' + p; }), ['Shares total', 'ID']);
+  var rows = expenses.map(function (ex, i) {
+    var rate = ex.currency === 'AUD' ? 1 : (ex.amount_aud > 0 ? ex.amount_local / ex.amount_aud : 0);
+    var sh = shares[i], tot = 0;
+    var per = people.map(function (p) { tot += sh[p] || 0; return (sh[p] || 0) / 100; });
+    return [ex.date, String(ex.date).slice(0, 7), (byId[ex.project_id] || {}).name || '', ex.city,
+            CAT_LABELS[ex.category] || 'Not set', ex.description, ex.paid_by, SPLIT_LABELS[ex.split_type] || ex.split_type,
+            ex.currency, ex.amount_local, Math.round(rate * 1e4) / 1e4, ex.amount_aud]
+      .concat(per, [tot / 100, ex.id]);
+  });
+
+  var sh = freshTab(SHEET_REPORT);
+  var ncol = head.length, nrow = rows.length + 1;
+  sh.getRange(2, 2, Math.max(rows.length, 1), 1).setNumberFormat('@');          // "2026-10" stays text
+  sh.getRange(1, 1, 1, ncol).setValues([head]).setFontWeight('bold').setBackground('#eef1f6');
+  if (rows.length) {
+    sh.getRange(2, 1, rows.length, ncol).setValues(rows);
+    sh.getRange(2, 1, rows.length, 1).setNumberFormat('yyyy-mm-dd');
+    sh.getRange(2, 10, rows.length, 1).setNumberFormat('#,##0.00');
+    sh.getRange(2, 11, rows.length, 1).setNumberFormat('0.0000');
+    sh.getRange(2, 12, rows.length, people.length + 2).setNumberFormat('#,##0.00');
+  }
+  sh.setFrozenRows(1);
+  sh.getRange(1, 1, Math.max(nrow, 2), ncol).createFilter();
+
+  buildSummary(projects, people, rows.map(function (r) { return r[1]; }), 13);
+  return rows.length;
+}
+
+/** Totals as formulas over Report, driven by B3 (project), B4 and B5 (dates). */
+function buildSummary(projects, people, months, firstShareCol) {
+  var old = book().getSheetByName(SHEET_SUMMARY);
+  var keep = old ? old.getRange(3, 2, 3, 1).getValues() : [['All'], [''], ['']];
+  var names = projects.map(function (p) { return p.name; });
+  if (names.indexOf(String(keep[0][0])) < 0) keep[0][0] = 'All';
+
+  var sh = freshTab(SHEET_SUMMARY);
+  var R = "Report!", L = R + '$L:$L';
+  var filt = ',' + R + '$C:$C,$C$3,' + R + '$A:$A,">="&$C$4,' + R + '$A:$A,"<="&$C$5';
+  var cells = [];                                       // [row, col, value, format] — written in one pass below
+  var put = function (r, c, v, fmt) { cells.push([r, c, v, fmt]); };
+  var MONEY = '#,##0.00', PCT = '0.0%';
+
+  put(1, 1, 'Trip Split — summary');
+  put(2, 1, 'Pick a project and dates; every total below follows. Amounts in AUD at each expense\'s own rate.');
+  put(3, 1, 'Project');  put(3, 2, keep[0][0]);  put(3, 3, '=IF($B$3="All","*",$B$3)');
+  put(4, 1, 'From');     put(4, 2, keep[1][0]);  put(4, 3, '=IF($B$4="",DATE(1900,1,1),$B$4)');
+  put(5, 1, 'To');       put(5, 2, keep[2][0]);  put(5, 3, '=IF($B$5="",DATE(9999,12,31),$B$5)');
+  put(7, 1, 'Total spent'); put(7, 2, '=SUMIFS(' + L + filt + ')', MONEY);
+  put(7, 3, '=COUNTIFS(' + R + '$C:$C,$C$3,' + R + '$A:$A,">="&$C$4,' + R + '$A:$A,"<="&$C$5)&" expenses"');
+
+  var r = 9, heads = [];
+  var section = function (title, cols) { heads.push(r); put(r, 1, title); r++; cols.forEach(function (h, i) { put(r, i + 1, h); }); heads.push(r); r++; };
+  var pct = function (row) { return '=IF($B$7=0,0,B' + row + '/$B$7)'; };
+
+  section('By category', ['Category', 'Spent (AUD)', 'Share of total']);
+  Object.keys(CAT_LABELS).map(function (k) { return CAT_LABELS[k]; }).concat(['Not set']).forEach(function (c) {
+    put(r, 1, c); put(r, 2, '=SUMIFS(' + L + ',' + R + '$E:$E,$A' + r + filt + ')', MONEY); put(r, 3, pct(r), PCT); r++;
+  });
+  r++;
+  section('By month', ['Month', 'Spent (AUD)', 'Share of total']);
+  var monthList = months.filter(function (m, i) { return m && months.indexOf(m) === i; }).sort();
+  monthList.forEach(function (m) {
+    put(r, 1, m, '@'); put(r, 2, '=SUMIFS(' + L + ',' + R + '$B:$B,$A' + r + filt + ')', MONEY); put(r, 3, pct(r), PCT); r++;
+  });
+  r++;
+  section('By person', ['Person', 'Paid (AUD)', 'Their share (AUD)', 'Paid − share']);
+  people.forEach(function (p, i) {
+    var col = colLetter(firstShareCol - 1 + i);
+    put(r, 1, p);
+    put(r, 2, '=SUMIFS(' + L + ',' + R + '$G:$G,$A' + r + filt + ')', MONEY);
+    put(r, 3, '=SUMIFS(' + R + '$' + col + ':$' + col + filt + ')', MONEY);
+    put(r, 4, '=B' + r + '-C' + r, MONEY);
+    r++;
+  });
+  put(r, 1, 'Paid − share is before settlements and per-person currencies; the app\'s Settle screen has what is owed.'); r += 2;
+  section('By project (dates apply, project picker doesn\'t)', ['Project', 'Spent (AUD)']);
+  names.forEach(function (n) {
+    put(r, 1, n);
+    put(r, 2, '=SUMIFS(' + L + ',' + R + '$C:$C,$A' + r + ',' + R + '$A:$A,">="&$C$4,' + R + '$A:$A,"<="&$C$5)', MONEY);
+    r++;
+  });
+
+  var grid = [];
+  for (var i = 0; i < r; i++) { grid.push(['', '', '', '']); }
+  cells.forEach(function (c) { grid[c[0] - 1][c[1] - 1] = c[2]; });
+  // Formats go on first, so "2026-10" is kept as text rather than read as a date.
+  var fmts = [];
+  for (var j = 0; j < r; j++) { fmts.push(['General', 'General', 'General', 'General']); }
+  cells.forEach(function (c) { if (c[3]) fmts[c[0] - 1][c[1] - 1] = c[3]; });
+  fmts[3][1] = fmts[4][1] = fmts[3][2] = fmts[4][2] = 'yyyy-mm-dd';
+  sh.getRange(1, 1, r, 4).setNumberFormats(fmts);
+  sh.getRange(1, 1, grid.length, 4).setValues(grid);
+
+  sh.getRange(1, 1).setFontWeight('bold').setFontSize(14);
+  sh.getRange(2, 1).setFontColor('#6b7280');
+  sh.getRange(3, 3, 3, 1).setFontColor('#9ca3af');
+  sh.getRange(3, 2, 3, 1).setBackground('#fff8db');
+  heads.forEach(function (row) { sh.getRange(row, 1, 1, 4).setFontWeight('bold'); });
+  sh.getRange(7, 1, 1, 2).setFontWeight('bold');
+  sh.getRange(3, 2).setDataValidation(SpreadsheetApp.newDataValidation()
+    .requireValueInList(['All'].concat(names), true).build());
+  sh.getRange(4, 2, 2, 1).setDataValidation(SpreadsheetApp.newDataValidation()
+    .requireDate().setAllowInvalid(false).build());
+  sh.setColumnWidth(1, 220);
 }
 
 /* ------------------------------------------------------------------ *
