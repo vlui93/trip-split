@@ -1573,8 +1573,10 @@ async function exportExcel(){
     .filter(Boolean).join(' - ').replace(/[\\/:*?"<>|]/g, '') + '.xlsx';
   const file = new File([xlsxBuild(wb)], name, { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
   // On an iPhone the share sheet is the dependable way out of a home-screen app: Save to Files, Mail, AirDrop.
+  // Share the file alone: a title or text rides along as a separate item, and Save to Files
+  // writes it out as a stray text file next to the spreadsheet.
   if (navigator.canShare && navigator.canShare({ files: [file] })){
-    try { await navigator.share({ files: [file], title: name }); return; }
+    try { await navigator.share({ files: [file] }); return; }
     catch(e){ if (e && e.name === 'AbortError') return; }
   }
   const a = document.createElement('a');
