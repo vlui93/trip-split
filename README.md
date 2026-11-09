@@ -197,6 +197,38 @@ Tap a slice or a row to pick it out. Expenses saved before categories existed
 are counted by a guess from their description, and the breakdown says how many.
 Edit them to set one.
 
+### Importing bank and card statements
+
+**＋ → 🏦 Statement.** Pick the project, whose card or account it is, and whether
+the card is mostly personal or mostly shared. Then choose a PDF statement or one
+or more screenshots from a bank or card app. Everything is read on the phone:
+a PDF's own text through pdf.js (a scanned PDF falls back to the offline reader),
+and a screenshot through the offline reader. Nothing is uploaded and no AI is
+used. Amounts are taken as AUD, which is what the card actually charged.
+
+- **Bank statements** (date / description / debit / credit / balance) are checked
+  against the running balance line by line. A line that doesn't add up is marked
+  ⚠, so a misread amount shows straight away.
+- **Card app lists** (merchant, amount, date) report how many transactions were
+  read and their total, to compare with the app. Overlapping screenshots of one
+  list are counted once, but two real identical charges on the same day are kept.
+- Payments, refunds, transfers between your own accounts, cash withdrawals and
+  direct debits are skipped automatically, with "Split anyway" if you need it.
+  A payment to someone in the group is offered as a settlement.
+- **Each line to review:** **Split** opens the form filled in, **Personal** skips
+  it, **Already in** links it to an expense entered by hand (and can switch that
+  expense to the card's actual AUD), and **Always ignore** stops a merchant
+  coming up again.
+- **Finish:** for a mostly-personal card, finishing treats the rest as personal.
+  For a mostly-shared card, **Split the rest equally** adds them all at once.
+  Re-importing the same statement recognises lines already dealt with.
+
+Anything saved from a statement or a receipt scan is shown straight back with a
+**Check this before moving on** step: the total, date, category and each share.
+
+The PDF reader is part of the offline download (**More → Connection**, now about
+12 MB). On a phone that already has the reader, tap Download again to add it.
+
 ### Excel export and the Report tab
 
 **In the app:** History filters by place, person, category and a date range.
@@ -429,6 +461,6 @@ no rows.
 |---|---|
 | `index.html` | The whole frontend: markup, styles and logic |
 | `Code.gs` | Apps Script backend |
-| `tests/` | `node tests/<name>.test.mjs`: receipt parsing, the currency ledger, categories and the breakdown, the Excel export, the Report tab, and invite access control (runs `Code.gs` against a fake Sheet in `fake-gas.mjs`) |
+| `tests/` | `node tests/<name>.test.mjs`: receipt parsing, the currency ledger, categories and the breakdown, the Excel export, the Report tab, statement import, and invite access control (runs `Code.gs` against a fake Sheet in `fake-gas.mjs`) |
 | `manifest.webmanifest` | Web app manifest |
 | `icon-*-v2.png`, `mkicon.py`, `icon.svg` | Home-screen icons and the script that generates them |
