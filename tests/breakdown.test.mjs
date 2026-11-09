@@ -18,6 +18,8 @@ t('guesses from everyday descriptions', () => {
     'Hotel deposit': 'stay', 'Airbnb Shanghai': 'stay',
     'Disneyland tickets': 'activities', 'Peak tram': 'transport', 'Museum entry tickets': 'activities',
     'Souvenirs': 'shopping', '7-Eleven snacks': 'groceries', 'Woolworths': 'groceries',
+    'Transportfornsw Opal Sampletown': 'transport', 'Klook Travel Technology': 'activities', 'Example Air Mascot': 'transport',
+    'Dumpling House Sampletown': 'food', 'Uber Eats': 'food', 'Uber trip': 'transport',
     'Rent': 'bills', 'Electricity': 'bills', 'Water': 'bills', 'Netflix': 'bills',
   };
   for (const [d, c] of Object.entries(cases)) assert.equal(guessCategory(d), c, d);

@@ -394,7 +394,7 @@ body.guest .owner-only{display:none !important}
     <div class="row between"><span style="font-size:14px;color:var(--muted)">Unsynced changes</span><span class="tag mono" id="queueCount">0</span></div>
     <div class="row between"><span style="font-size:14px;color:var(--muted)">Receipt scanning</span><span class="tag" id="aiWho">off</span></div>
     <div class="row between"><span style="font-size:14px;color:var(--muted)">Offline receipt reader</span><span class="tag" id="ocrState">…</span></div>
-    <button class="btn ghost full sm" id="ocrGet" style="display:none">Download offline reader (10 MB)</button>
+    <button class="btn ghost full sm" id="ocrGet" style="display:none">Download offline reader (12 MB)</button>
     <button class="btn ghost full sm" id="forceSync">Sync now</button>
     <button class="btn danger full sm" id="cfgClear">Disconnect this device</button>
   </div>
@@ -427,6 +427,7 @@ body.guest .owner-only{display:none !important}
 
     <div class="aibar" id="aiBar" style="display:none">
       <button id="btnScan">📷 Scan receipt</button>
+      <button id="btnImport">🏦 Statement</button>
       <button id="btnSay">💬 Describe it</button>
     </div>
     <div id="aiNote"></div>
@@ -595,6 +596,17 @@ body.guest .owner-only{display:none !important}
     <div class="sub2" id="busySub">This takes a few seconds</div>
   </div>
 </div>
+
+<!-- ============ IMPORT SHEET ============ -->
+<div class="sheet" id="impSheet">
+  <div class="scrim" data-close="impSheet"></div>
+  <div class="panel">
+    <div class="grab"></div>
+    <div class="sheet-head"><h2>Import transactions</h2><button class="btn sm ghost" data-close="impSheet">Close</button></div>
+    <div id="impBody"></div>
+  </div>
+</div>
+<input id="impFiles" type="file" accept="application/pdf,image/*" multiple style="display:none">
 
 <!-- ============ INVITE SHEET ============ -->
 <div class="sheet" id="invSheet">
@@ -1637,6 +1649,614 @@ function renderSettle(){
   foldAllButton('settle', log);
 }
 
+/* ============================================================
+   Importing bank and card statements
+
+   PDFs and screenshots are read on the phone: a PDF's own text through
+   pdf.js, a screenshot through the offline reader. Nothing is uploaded,
+   and nothing is saved until you split a line. Amounts are taken as AUD —
+   what the card actually charged.
+   ============================================================ */
+
+/* stmt:start — pure functions, exercised by tests/statement.test.mjs */
+const MON3 = ['jan','feb','mar','apr','may','jun','jul','aug','sep','oct','nov','dec'];
+const MONEY_RE = /(-?)\s*\$?\s*(\d{1,3}(?:,\d{3})+|\d+)\.(\d{2})(\s*CR\b)?/gi;
+
+function stmtMoney(s){
+  const out = [];
+  String(s).replace(MONEY_RE, (m, neg, int, dec, cr, at) => {
+    out.push({ v: Number(int.replace(/,/g, '') + '.' + dec), neg: !!neg || !!cr, at, len: m.length });
+    return m;
+  });
+  return out;
+}
+const pad2 = n => String(n).padStart(2, '0');
+function ymdOf(y, m, d){ return y && m >= 1 && m <= 12 && d >= 1 && d <= 31 ? `${y}-${pad2(m)}-${pad2(d)}` : ''; }
+const fullYear = y => y < 100 ? 2000 + y : y;
+
+/** A date at the start of a bank statement line: 05/10/26, 05/10/2026, 5 Oct 26, 05 Oct. */
+function leadDate(line, yearHint){
+  let m = /^\s*(\d{1,2})\/(\d{1,2})\/(\d{2,4})\b\s*(.*)$/.exec(line);
+  if (m) return { date: ymdOf(fullYear(+m[3]), +m[2], +m[1]), rest: m[4] };
+  m = /^\s*(\d{1,2})\s+([A-Za-z]{3})[a-z]*\.?(?:\s+(\d{2,4}))?\b\s*(.*)$/.exec(line);
+  if (m && MON3.includes(m[2].toLowerCase()))
+    return { date: ymdOf(m[3] ? fullYear(+m[3]) : yearHint, MON3.indexOf(m[2].toLowerCase()) + 1, +m[1]), rest: m[4] };
+  return null;
+}
+/**
+ * A date line, as card apps show under each transaction: "17 Oct 2026". When the
+ * merchant fits on one line the amount sits level with the date, so it may follow:
+ * "15 Oct 2026 $230.58".
+ */
+function onlyDate(line){
+  const m = /^\s*(\d{1,2})\s+([A-Za-z]{3})[a-z]*\.?\s+(\d{4})\s*(?:-?\s*\$?\s*[\d,]+\.\d{2}(?:\s*CR)?\s*)?$/i.exec(line);
+  return m && MON3.includes(m[2].toLowerCase()) ? ymdOf(+m[3], MON3.indexOf(m[2].toLowerCase()) + 1, +m[1]) : '';
+}
+
+const STMT_NOISE = /banking corporation|statement no\b|page \d+ of \d+|please check all entries|^transactions?$|^date\b.*description|interest rates|abn \d|afsl|credit licence/i;
+
+/** What kind of line it is. Only purchases go to review; the rest are skipped or offered differently. */
+function stmtKind(desc, credit, people){
+  if (credit) return { kind: 'credit' };
+  if (/osko|pay ?anyone|payid|\bnpp\b|transfer to/i.test(desc) && !/tfr westpac|own account/i.test(desc)){
+    const words = desc.toLowerCase().split(/[^a-z]+/).filter(Boolean);
+    const who = (people || []).find(p => p.toLowerCase().split(/\s+/).some(w => w.length > 1 && words.includes(w)));
+    return { kind: 'person', person: who || '' };
+  }
+  if (/\btfr\b|transfer|withdrawal mobile|internal|bpay/i.test(desc)) return { kind: 'transfer' };
+  if (/payment by authority|direct debit/i.test(desc)) return { kind: 'directdebit' };
+  if (/\batm\b|cash withdrawal|cash out/i.test(desc)) return { kind: 'cash' };
+  return { kind: 'purchase' };
+}
+
+/** "Eftpos Debit 0337663 Coles 0825 Castle Hill 04/10" → { name: "Coles Castle Hill", day: "04/10" } */
+function cleanMerchant(desc){
+  let s = String(desc).replace(/…|\.{3}$/g, ' ').replace(/\s+/g, ' ').trim();
+  let day = '';
+  s = s.replace(/\s(\d{2})\/(\d{2})$/, (m, d, mo) => { day = d + '/' + mo; return ''; });
+  s = s.replace(/^(debit card purchase|eftpos debit|eftpos purchase|visa (debit )?purchase|card purchase|purchase|pos)\s+/i, '')
+       .replace(/^\d{5,}\s+/, '')
+       .replace(/^[a-z0-9 ]{2,20}\*\s*\d*\s*/i, '')          // KPAY*, SQ *, LIVE PAYMENTS*1915
+       .replace(/\b(pty|ltd|limited|aus|au|australia)\b\.?/gi, '')
+       .replace(/\b\d{3,}\b/g, '')
+       .replace(/\s+/g, ' ').trim();
+  if (s === s.toUpperCase() || s === s.toLowerCase()) s = s.toLowerCase().replace(/\b[a-z]/g, c => c.toUpperCase());
+  return { name: s || String(desc).trim(), day };
+}
+
+/**
+ * A bank statement: dated rows, descriptions that wrap onto the next line,
+ * and amounts at the end. lines: [{ text, cols? }] where cols, from a PDF,
+ * is { debit, credit, balance } x-positions and each line carries its money
+ * tokens' x in `xs`. Without columns (a screenshot) the running balance
+ * decides debit or credit, and checks every row.
+ */
+function parseBankStatement(lines, opts){
+  opts = opts || {};
+  const yearHint = opts.year || new Date().getFullYear();
+  const out = [];
+  let cur = null, prevBal = null, opening = null, closing = null, cols = null;
+  const finish = () => {
+    if (!cur) return;
+    const text = cur.parts.join(' ').replace(/\s+/g, ' ').trim();
+    const money = cur.money;
+    if (/opening balance|balance brought forward/i.test(text)){
+      if (money.length) prevBal = opening = money[money.length - 1].v * (money[money.length - 1].neg ? -1 : 1);
+      cur = null; return;
+    }
+    if (/closing balance|balance carried forward/i.test(text)){
+      if (money.length) closing = money[money.length - 1].v;
+      cur = null; return;
+    }
+    let desc = text;
+    cur.moneyText.forEach(t => { desc = desc.replace(t, ' '); });
+    desc = desc.replace(/\s+/g, ' ').trim();
+    let amount = null, credit = null, balance = null, ok = null;
+    if (cols && money.some(t => t.x != null)){
+      money.forEach(t => {
+        const near = ['debit', 'credit', 'balance'].filter(k => cols[k] != null)
+          .sort((a, b) => Math.abs(cols[a] - t.x) - Math.abs(cols[b] - t.x))[0];
+        if (near === 'balance') balance = t.v * (t.neg ? -1 : 1);
+        else { amount = t.v; credit = near === 'credit'; }
+      });
+    } else if (money.length){
+      const last = money[money.length - 1];
+      if (money.length >= 2){ amount = money[money.length - 2].v; balance = last.v * (last.neg ? -1 : 1); }
+      else amount = last.v;
+      if (amount != null && last.neg && money.length === 1) credit = true;
+    }
+    if (amount == null){ cur = null; return; }
+    if (balance != null && prevBal != null){
+      if (credit === null){
+        if (Math.abs(prevBal - amount - balance) < 0.005) credit = false;
+        else if (Math.abs(prevBal + amount - balance) < 0.005) credit = true;
+      }
+      ok = credit !== null && Math.abs(prevBal + (credit ? amount : -amount) - balance) < 0.005;
+    }
+    if (credit === null) credit = /deposit|credit|refund|salary|interest paid|payment received|thank ?you/i.test(desc);
+    if (balance != null) prevBal = balance;
+    const k = stmtKind(desc, credit, opts.people);
+    const m = cleanMerchant(desc);
+    let date = cur.date;
+    if (m.day){                                            // the purchase day inside the description beats the posting day
+      const [d, mo] = m.day.split('/').map(Number);
+      let y = +date.slice(0, 4);
+      if (mo > +date.slice(5, 7)) y--;                     // posted in January for a December purchase
+      date = ymdOf(y, mo, d) || date;
+    }
+    out.push(Object.assign({ date, posted: cur.date, desc, merchant: m.name, amount, credit, ok }, k));
+    cur = null;
+  };
+  // Lines after a row already has its amounts are held back: if the next date
+  // stands alone, the row's date was centred in a wrapped cell and they belong
+  // to it; otherwise they continue the row before.
+  let held = [];
+  const add = (text, xs) => {
+    cur.parts.push(text);
+    stmtMoney(text).forEach((t, i) => { t.x = xs ? xs[i] : null; cur.money.push(t); cur.moneyText.push(text.substr(t.at, t.len)); });
+  };
+  lines.forEach(L => {
+    if (L && L.cols){ cols = L.cols; return; }            // a PDF's column positions, not a line
+    const text = String(typeof L === 'string' ? L : L.text || '').replace(/\s+/g, ' ').trim();
+    if (!text || STMT_NOISE.test(text)) return;
+    const xs = L.xs || null;
+    const d = leadDate(text, yearHint);
+    if (d && d.date){
+      const alone = !/[a-z]/i.test(d.rest);
+      if (cur && !alone) held.forEach(h => add(h.text, h.xs));
+      const carry = alone ? held : [];
+      held = [];
+      finish();
+      cur = { date: d.date, parts: [], money: [], moneyText: [] };
+      carry.forEach(h => add(h.text, h.xs));
+      // The date took no amount with it, so the amounts' x-positions still line up with the rest.
+      if (d.rest) add(d.rest, xs);
+    } else if (cur){
+      if (cur.money.length && !stmtMoney(text).length) held.push({ text, xs });
+      else { held.forEach(h => add(h.text, h.xs)); held = []; add(text, xs); }
+    }
+  });
+  if (cur) held.forEach(h => add(h.text, h.xs));
+  finish();
+  return { kind: 'bank', rows: out, opening, closing };
+}
+
+/**
+ * A card app's list: one to three lines of merchant, the amount on the right
+ * (joined to a merchant line or on its own), then a date line. A row cut off
+ * at the bottom of a screenshot has no date line yet, so it is left out here
+ * and picked up from the next screenshot.
+ */
+function parseCardList(lines, opts){
+  opts = opts || {};
+  const rows = [];
+  let block = [], card = '';
+  lines.forEach(L => {
+    const text = (typeof L === 'string' ? L : L.text).replace(/\s+/g, ' ').trim();
+    if (!text) return;
+    const cm = /card ending\D*(\d{3,6})/i.exec(text) || /(?:ending|ends? in|•{2,}|x{2,}|\*{2,})\s*(\d{4,6})\b/i.exec(text);
+    if (cm){ card = cm[1]; block = []; return; }
+    if (/\d{1,2} [a-z]{3}[a-z]* \d{4}\s*[-–]\s*\d{1,2} [a-z]{3}/i.test(text) || /^(filter|search|transactions|pending|<)$/i.test(text)){ block = []; return; }
+    const date = onlyDate(text);
+    if (!date){ block.push(text); return; }
+    const tail = text.replace(/^\s*\d{1,2}\s+[A-Za-z]{3}[a-z]*\.?\s+\d{4}/, '').trim();
+    if (tail) block.push(tail);
+    const joined = block.join(' ');
+    const money = stmtMoney(joined.replace(/\$\s*(?=\d)/g, '$'));
+    block = [];
+    if (!money.length) return;
+    const t = money[money.length - 1];
+    let desc = joined;
+    desc = (desc.slice(0, t.at) + ' ' + desc.slice(t.at + t.len)).replace(/\s+/g, ' ').trim();
+    const credit = t.neg || /payment received|thank ?you|refund|reversal/i.test(desc);
+    const k = stmtKind(desc, credit, opts.people);
+    rows.push(Object.assign({ date, posted: date, desc, merchant: cleanMerchant(desc).name, amount: t.v, credit, ok: null }, k));
+  });
+  return { kind: 'card', rows, card };
+}
+
+/** Which layout a page of text is. */
+function stmtLayout(lines){
+  const ts = lines.map(L => (typeof L === 'string' ? L : L.text));
+  const bank = ts.filter(t => /^\s*\d{1,2}\/\d{1,2}\/\d{2,4}\b/.test(t)).length;
+  const card = ts.filter(t => onlyDate(t)).length;
+  return card > bank ? 'card' : 'bank';
+}
+function parseStatementText(lines, opts){
+  return stmtLayout(lines) === 'card' ? parseCardList(lines, opts) : parseBankStatement(lines, opts);
+}
+
+const merchantKey = s => String(s || '').toLowerCase().replace(/[^a-z0-9]/g, '').slice(0, 14);
+const rowKey = r => `${r.date}|${r.amount.toFixed(2)}|${merchantKey(r.merchant)}|${r.credit ? 'c' : 'd'}`;
+
+/**
+ * Screenshots of one list overlap, so the same transaction is often read
+ * twice. But a day can hold two real identical charges (two Opal top-ups).
+ * So each key keeps as many copies as the screenshot with the most of them.
+ */
+function mergeOverlapping(lists){
+  const best = {}, order = [], sample = {};
+  lists.forEach(rows => {
+    const count = {};
+    rows.forEach(r => {
+      const k = rowKey(r);
+      count[k] = (count[k] || 0) + 1;
+      if (!(k in best)) { best[k] = 0; order.push(k); sample[k] = r; }
+    });
+    Object.keys(count).forEach(k => { best[k] = Math.max(best[k], count[k]); });
+  });
+  const out = [];
+  order.forEach(k => { for (let i = 0; i < best[k]; i++) out.push(Object.assign({}, sample[k])); });
+  return out;
+}
+
+/** A stable id for a line, so a re-import knows it has been dealt with. */
+function fingerprints(rows, source){
+  const seen = {};
+  return rows.map(r => {
+    const k = source + '|' + rowKey(r);
+    seen[k] = (seen[k] || 0) + 1;
+    return Object.assign({}, r, { fp: k + '#' + seen[k] });
+  });
+}
+
+/**
+ * An expense this line is probably already in the app as: same payer, a few
+ * days either side (cards post late), and the same amount — exact for AUD,
+ * within 6% for a foreign-currency expense whose AUD was an estimate.
+ */
+function findMatch(row, expenses, payer){
+  const day = d => Date.UTC(+d.slice(0, 4), +d.slice(5, 7) - 1, +d.slice(8, 10)) / 864e5;
+  let best = null;
+  expenses.forEach(ex => {
+    if (ex.paid_by !== payer || (ex.split_detail && ex.split_detail.ref)) return;
+    const dd = day(row.date) - day(String(ex.date));
+    if (dd < -3 || dd > 7) return;
+    const aud = Number(ex.amount_aud) || 0;
+    const diff = Math.abs(aud - row.amount);
+    const okAmt = ex.currency === 'AUD' ? diff < 0.015 : diff <= row.amount * 0.06 + 0.01;
+    if (!okAmt) return;
+    const score = diff + Math.abs(dd) * 0.01;
+    if (!best || score < best.score) best = { ex, score, diff };
+  });
+  return best ? { id: best.ex.id, diff: Math.round(best.diff * 100) / 100 } : null;
+}
+/* stmt:end */
+
+/* ---------- reading files ---------- */
+
+const K_IMP = 'tsplit.import';
+let IMP = load(K_IMP, null);        // the import in progress, kept if the app is closed mid-way
+const saveImp = () => save(K_IMP, IMP);
+
+let pdfLib = null;
+async function loadPdfLib(){
+  if (!pdfLib){
+    try { pdfLib = await import(OCR_BASE + 'pdf/pdf.min.mjs'); }
+    catch(e){ throw new Error('The PDF reader isn’t on this phone yet — download the offline reader in More → Connection while you have signal.'); }
+    pdfLib.GlobalWorkerOptions.workerSrc = OCR_BASE + 'pdf/pdf.worker.min.mjs';
+  }
+  return pdfLib;
+}
+
+/** A PDF's own text, line by line, with where each amount sits so columns can be told apart. */
+async function pdfLines(file){
+  const lib = await loadPdfLib();
+  const doc = await lib.getDocument({ data: new Uint8Array(await file.arrayBuffer()), isEvalSupported: false }).promise;
+  const lines = [];
+  let chars = 0;
+  for (let p = 1; p <= doc.numPages; p++){
+    $('#busySub').textContent = `Page ${p} of ${doc.numPages}`;
+    const tc = await (await doc.getPage(p)).getTextContent();
+    const items = tc.items.filter(i => i.str && i.str.trim())
+      .map(i => ({ s: i.str.trim(), x: i.transform[4], y: i.transform[5], r: i.transform[4] + (i.width || 0) }));
+    chars += items.reduce((a, i) => a + i.s.length, 0);
+    const rows = [];
+    items.forEach(it => {
+      let row = rows.find(r => Math.abs(r.y - it.y) < 3);
+      if (!row){ row = { y: it.y, items: [] }; rows.push(row); }
+      row.items.push(it);
+    });
+    rows.sort((a, b) => b.y - a.y).forEach(row => {
+      row.items.sort((a, b) => a.x - b.x);
+      // Amounts are right-aligned under their headings, so right edges line up.
+      const head = {};
+      row.items.forEach(i => { const k = i.s.toLowerCase(); if (/^(debit|credit|balance|withdrawals?|deposits?)$/.test(k)) head[k.replace(/s$/, '')] = i.r; });
+      const debit = head.debit != null ? head.debit : head.withdrawal, credit = head.credit != null ? head.credit : head.deposit;
+      if (debit != null && credit != null) lines.push({ cols: { debit, credit, balance: head.balance } });
+      const xs = [];
+      row.items.forEach(i => stmtMoney(i.s).forEach(() => xs.push(i.r)));
+      lines.push({ text: row.items.map(i => i.s).join(' '), xs });
+    });
+  }
+  return { lines, chars, doc };
+}
+
+/** Screenshots in dark mode read better flipped to dark-on-light. */
+function prepImage(src){
+  return new Promise((resolve, reject) => {
+    const url = typeof src === 'string' ? src : URL.createObjectURL(src);
+    const img = new Image();
+    img.onload = () => {
+      const c = document.createElement('canvas');
+      c.width = img.naturalWidth; c.height = img.naturalHeight;
+      const ctx = c.getContext('2d');
+      ctx.drawImage(img, 0, 0);
+      if (typeof src !== 'string') URL.revokeObjectURL(url);
+      const px = ctx.getImageData(0, 0, c.width, c.height);
+      let lum = 0, n = 0;
+      for (let i = 0; i < px.data.length; i += 4 * 97){ lum += 0.3 * px.data[i] + 0.59 * px.data[i + 1] + 0.11 * px.data[i + 2]; n++; }
+      if (lum / n < 110){
+        for (let i = 0; i < px.data.length; i += 4){ px.data[i] = 255 - px.data[i]; px.data[i + 1] = 255 - px.data[i + 1]; px.data[i + 2] = 255 - px.data[i + 2]; }
+        ctx.putImageData(px, 0, 0);
+      }
+      resolve(c.toDataURL('image/png'));
+    };
+    img.onerror = () => reject(new Error('That image could not be opened.'));
+    img.src = url;
+  });
+}
+
+async function ocrLines(images){
+  const T = await loadOcrLib();
+  let k = 0;
+  const worker = await T.createWorker(['eng'], 1, {
+    workerPath: OCR_BASE + 'worker.min.js', corePath: ocrCore(), langPath: OCR_BASE + 'lang', workerBlobURL: false,
+    logger: m => { if (m.status === 'recognizing text') $('#busySub').textContent = `Image ${k} of ${images.length} · ${Math.round(m.progress * 100)}%`; }
+  });
+  try {
+    const out = [];
+    for (const im of images){ k++; out.push(((await worker.recognize(await prepImage(im))).data.text || '').split('\n')); }
+    return out;
+  } finally { worker.terminate(); }
+}
+
+/** Read what was picked: one PDF, or one or more screenshots of the same list. */
+async function readStatementFiles(files){
+  const people = S.people.slice();
+  const pdf = files.find(f => /pdf$/i.test(f.type) || /\.pdf$/i.test(f.name));
+  if (pdf){
+    const r = await pdfLines(pdf);
+    if (r.chars > 40) return Object.assign(parseStatementText(r.lines, { people }), { from: 'pdf' });
+    // A scanned PDF has no text inside: read its pages as pictures instead.
+    const pics = [];
+    for (let p = 1; p <= r.doc.numPages; p++){
+      const page = await r.doc.getPage(p), vp = page.getViewport({ scale: 2 });
+      const c = document.createElement('canvas'); c.width = vp.width; c.height = vp.height;
+      await page.render({ canvasContext: c.getContext('2d'), viewport: vp }).promise;
+      pics.push(c.toDataURL('image/png'));
+    }
+    const pages = await ocrLines(pics);
+    return Object.assign(parseStatementText([].concat(...pages), { people }), { from: 'scan' });
+  }
+  const shots = await ocrLines(files);
+  const parsed = shots.map(lines => parseStatementText(lines, { people }));
+  const kind = parsed.filter(p => p.kind === 'card').length >= parsed.length / 2 ? 'card' : 'bank';
+  if (kind === 'bank'){
+    // Pages of a statement follow on from each other, so read them as one.
+    return Object.assign(parseBankStatement([].concat(...shots), { people }), { from: 'screenshots' });
+  }
+  return { kind: 'card', from: 'screenshots', card: (parsed.find(p => p.card) || {}).card || '',
+           rows: mergeOverlapping(parsed.map(p => p.rows)) };
+}
+
+/* ---------- the review list ---------- */
+
+const SKIP_WHY = { credit: 'Payment, refund or deposit', transfer: 'Transfer between accounts', cash: 'Cash withdrawal',
+                   directdebit: 'Direct debit', person: 'Payment to someone outside the group', ignore: 'On your ignore list',
+                   done: 'Dealt with in an earlier import' };
+
+function openImport(){
+  if (!IMP || !IMP.items){
+    const act = activeProject();
+    const last = PREFS.impLast || {};
+    IMP = { pid: act ? act.id : '', payer: GUEST() ? GUEST().person : (last.payer || PREFS.me || pPeople()[0] || ''),
+            mode: last.mode || 'personal' };
+  }
+  renderImport();
+  openSheet('impSheet');
+}
+
+function impProject(){ return projectById(IMP.pid) || activeProject(); }
+
+function renderImport(){
+  const body = $('#impBody');
+  if (!IMP.items){
+    const pr = impProject();
+    const payers = GUEST() ? [GUEST().person] : ((pr && pr.members && pr.members.length) ? pr.members : S.people);
+    body.innerHTML = `<div class="card stack">
+      <div><label class="fl">Add to</label><div class="chips">${projects().map(p =>
+        `<button class="chip ${IMP.pid===p.id?'on':''}" data-imppid="${esc(p.id)}">${esc(p.name)}</button>`).join('')}</div></div>
+      <div><label class="fl">Whose card or account is it?</label><div class="chips">${payers.map(p =>
+        `<button class="chip ${IMP.payer===p?'on':''}" data-imppay="${esc(p)}">${esc(p)}</button>`).join('')}</div></div>
+      <div><label class="fl">This card is used for</label><div class="chips">
+        <button class="chip ${IMP.mode==='personal'?'on':''}" data-impmode="personal">Mostly personal</button>
+        <button class="chip ${IMP.mode==='shared'?'on':''}" data-impmode="shared">Mostly shared</button></div>
+        <div style="font-size:12.5px;color:var(--muted);margin-top:6px">${IMP.mode === 'personal'
+          ? 'You pick what to split; when you finish, the rest is treated as personal.'
+          : 'When you finish you can split everything left equally, in one go.'}</div></div>
+      <button class="btn primary full" id="impPick">Choose a PDF statement or screenshots</button>
+    </div>
+    <p class="sub">Read on this phone — nothing is uploaded, and only the lines you split are saved. Amounts are taken as AUD, what the card was actually charged. Several screenshots of one list can be picked together; any overlap is counted once.</p>`;
+    return;
+  }
+
+  const items = IMP.items;
+  const todo = items.filter(i => i.status === 'todo');
+  const skipped = items.filter(i => i.status === 'skip');
+  const done = items.filter(i => !['todo', 'skip'].includes(i.status));
+  const debits = items.filter(i => !i.credit);
+  const checked = items.filter(i => i.ok !== null);
+  const bad = items.filter(i => i.ok === false);
+  let summary = `Read ${items.length} transaction${items.length===1?'':'s'}${IMP.card ? ' · card ending ' + esc(IMP.card) : ''}. `;
+  if (checked.length){
+    summary += bad.length
+      ? `<b>${bad.length} line${bad.length>1?'s don’t':' doesn’t'} add up</b> against the running balance — check ${bad.length>1?'their':'its'} amount (marked ⚠).`
+      : `Every line adds up against the statement’s running balance ✓`;
+  } else {
+    summary += `Charges total <b>${esc(fmtAud(debits.reduce((a, i) => a + i.amount, 0)))}</b> — compare with your card app.`;
+  }
+
+  const row = (it, i) => {
+    const cat = catOf(guessCategory(it.merchant + ' ' + it.desc));
+    const match = it.match && (S.expenses || []).find(e => String(e.id) === String(it.match.id));
+    const acts = it.status === 'todo' ? `<div class="row" style="gap:6px;flex-wrap:wrap;margin-top:8px">
+        <button class="btn sm primary" data-impsplit="${i}">Split</button>
+        <button class="btn sm ghost" data-imppers="${i}">Personal</button>
+        ${match ? `<button class="btn sm ghost" data-implink="${i}">Already in: ${esc(match.description)} · ${esc(fmtAud(match.amount_aud))}</button>` : ''}
+        ${it.kind === 'person' && it.person ? `<button class="btn sm ghost" data-impsettle="${i}">Settlement to ${esc(it.person)}</button>` : ''}
+      </div>
+      ${it.kind === 'person' ? '' : `<button class="linkbtn" data-impign="${i}" style="margin-top:6px;font-size:12.5px">Always ignore “${esc(it.merchant)}”</button>`}`
+      : it.status === 'skip' ? `<button class="linkbtn" data-impsplit="${i}" style="font-size:12.5px">Split anyway</button>` : '';
+    const state = { split: 'Split', personal: 'Personal', linked: 'Linked to an expense', settled: 'Logged as a settlement', done: SKIP_WHY.done }[it.status];
+    return `<div class="xfer" style="display:block">
+      <div class="row" style="gap:10px;align-items:flex-start">
+        <div class="ic" style="width:36px;height:36px;border-radius:10px;background:var(--surface-2);display:grid;place-items:center;flex:none">${it.status==='todo' && cat ? cat.icon : it.credit ? '↩' : '·'}</div>
+        <div class="grow" style="min-width:0">
+          <div style="font-weight:620" class="ellip">${it.ok === false ? '⚠ ' : ''}${esc(it.merchant)}</div>
+          <div style="font-size:12.5px;color:var(--muted)">${esc(prettyDate(it.date))}${it.status === 'skip' ? ' · ' + esc(SKIP_WHY[it.why] || it.why) : state ? ' · ' + esc(state) : cat ? ' · ' + esc(cat.label) + '?' : ''}</div>
+        </div>
+        <div class="mono" style="font-weight:700;${it.credit ? 'color:var(--pos)' : ''}">${it.credit ? '−' : ''}${esc(fmtAud(it.amount))}</div>
+      </div>${acts}</div>`;
+  };
+  const section = (title, list, open) => list.length ? `<details ${open ? 'open' : ''} style="margin-top:10px">
+      <summary class="section-label" style="cursor:pointer;margin:12px 0 8px">${esc(title)} (${list.length})</summary>
+      <div class="card">${list.map(it => row(it, items.indexOf(it))).join('')}</div></details>` : '';
+
+  body.innerHTML = `<div class="banner ${bad.length ? 'warn' : 'ok'}" style="margin-top:0"><div>${summary}</div></div>
+    ${todo.length ? section('To review', todo, true) : `<div class="card"><div class="empty"><span class="big">✅</span>All done.</div></div>`}
+    ${section('Skipped automatically', skipped, false)}
+    ${section('Done', done, false)}
+    <div class="stack" style="margin-top:12px">
+      ${todo.length && IMP.mode === 'shared' ? `<button class="btn primary full" id="impSplitRest">Split the ${todo.length} left equally</button>` : ''}
+      ${todo.length ? `<button class="btn ghost full" id="impFinish">Finish — the ${todo.length} left are personal</button>`
+                    : `<button class="btn primary full" id="impFinish">Finish</button>`}
+      <button class="linkbtn" id="impRestart" style="text-align:center">Start a different import</button>
+    </div>`;
+}
+
+/** What each line starts as: to review, or skipped and why. */
+function sortImport(rows, source){
+  const handled = PREFS.handled || {}, ignore = PREFS.ignore || [];
+  const refs = new Set((S.expenses || []).map(e => e.split_detail && e.split_detail.ref).filter(Boolean));
+  return fingerprints(rows, source).map(r => {
+    let status = 'todo', why = '';
+    if (handled[r.fp] || refs.has(r.fp)){ status = 'done'; }
+    else if (r.credit){ status = 'skip'; why = 'credit'; }
+    else if (r.kind === 'person' && !r.person){ status = 'skip'; why = 'person'; }
+    else if (['transfer', 'cash', 'directdebit'].includes(r.kind)){ status = 'skip'; why = r.kind; }
+    else if (ignore.includes(merchantKey(r.merchant))){ status = 'skip'; why = 'ignore'; }
+    const match = status === 'todo' && r.kind === 'purchase' ? findMatch(r, S.expenses || [], IMP.payer) : null;
+    return Object.assign(r, { status, why, match });
+  });
+}
+
+async function runImport(files){
+  if (!files.length) return;
+  closeSheet('impSheet');
+  busy(true, 'Reading your statement…', 'On this phone');
+  try {
+    const r = await readStatementFiles(files);
+    if (!r.rows.length) throw new Error('No transactions found. Try a clearer screenshot, or the PDF itself.');
+    const source = r.card ? 'card:' + r.card : 'acct:' + IMP.payer;
+    PREFS.impLast = { payer: IMP.payer, mode: IMP.mode }; save(K_PREFS, PREFS);
+    Object.assign(IMP, { items: sortImport(r.rows, source), card: r.card || '', source, from: r.from });
+    saveImp();
+    renderImport(); openSheet('impSheet');
+  } catch(err){
+    toast(err.message || String(err));
+    openSheet('impSheet');
+  } finally { busy(false); }
+}
+
+function impMark(i, status){
+  const it = IMP.items[i];
+  it.status = status;
+  PREFS.handled = PREFS.handled || {};
+  PREFS.handled[it.fp] = status;
+  const keys = Object.keys(PREFS.handled);
+  if (keys.length > 3000) keys.slice(0, keys.length - 3000).forEach(k => delete PREFS.handled[k]);
+  save(K_PREFS, PREFS); saveImp();
+}
+
+/** Open the expense form filled in from a statement line. */
+function impSplit(i){
+  const it = IMP.items[i];
+  if (IMP.pid && IMP.pid !== (activeProject() || {}).id) setActiveProject(IMP.pid);
+  closeSheet('impSheet');
+  openAdd();
+  setCur('AUD');
+  // A statement line only has a place if the merchant names one of the project's.
+  const text = (it.merchant + ' ' + it.desc).toLowerCase();
+  F.city = pCities().find(c => text.includes(c.toLowerCase())) || '';
+  Object.assign(F, { date: it.date, desc: it.merchant, amount: it.amount.toFixed(2), paid_by: IMP.payer,
+                     category: guessCategory(it.merchant + ' ' + it.desc), catPicked: false, importIdx: i, importFp: it.fp, review: true });
+  renderForm();
+}
+
+function impLink(i){
+  const it = IMP.items[i];
+  const ex = (S.expenses || []).find(e => String(e.id) === String(it.match.id));
+  if (!ex) return;
+  ex.split_detail = Object.assign({}, ex.split_detail, { ref: it.fp });
+  if (Math.abs((Number(ex.amount_aud) || 0) - it.amount) > 0.009 &&
+      confirm(`The card was charged ${fmtAud(it.amount)}; the app has ${fmtAud(ex.amount_aud)} at its exchange rate.\n\nUse what the card actually charged? The split is worked out again from it.`)){
+    ex.amount_aud = round2(it.amount);
+  }
+  enqueue('updateExpense', ex);
+  impMark(i, 'linked');
+  persist(); renderAll(); renderImport();
+}
+
+function impSettle(i){
+  const it = IMP.items[i];
+  const st = { id: 's' + Date.now() + Math.floor(Math.random() * 1000), project_id: IMP.pid, from: IMP.payer, to: it.person,
+               currency: 'AUD', amount_local: round2(it.amount), amount_aud: round2(it.amount), date: it.date, note: 'From statement' };
+  S.settlements.push(st);
+  enqueue('addSettlement', st);
+  impMark(i, 'settled');
+  persist(); renderAll(); renderImport();
+  toast(`Settlement logged: ${IMP.payer} → ${it.person}`);
+}
+
+function impIgnore(i){
+  const key = merchantKey(IMP.items[i].merchant);
+  PREFS.ignore = Array.from(new Set((PREFS.ignore || []).concat([key])));
+  save(K_PREFS, PREFS);
+  IMP.items.forEach(it => { if (it.status === 'todo' && merchantKey(it.merchant) === key){ it.status = 'skip'; it.why = 'ignore'; } });
+  saveImp(); renderImport();
+}
+
+function impFinish(){
+  IMP.items.forEach((it, i) => { if (it.status === 'todo') impMark(i, 'personal'); });
+  IMP = null; save(K_IMP, null);
+  closeSheet('impSheet'); showAiBar(); toast('Import finished');
+}
+
+/** A mostly-shared card: everything left, split equally between the project's members. */
+function impSplitRest(){
+  const todo = IMP.items.map((it, i) => [it, i]).filter(([it]) => it.status === 'todo');
+  const pr = impProject();
+  const members = (pr && pr.members && pr.members.length) ? pr.members.slice() : S.people.slice();
+  if (!confirm(`Add ${todo.length} expense${todo.length>1?'s':''}, each paid by ${IMP.payer} and split equally between ${members.join(', ')}?`)) return;
+  todo.forEach(([it, i]) => {
+    const ex = { id: 'e' + Date.now() + Math.floor(Math.random() * 1e6), project_id: pr ? pr.id : '', date: it.date, city: '',
+      description: it.merchant, paid_by: IMP.payer, currency: 'AUD', amount_local: round2(it.amount), amount_aud: round2(it.amount),
+      split_type: 'equal', split_detail: { participants: members, ref: it.fp }, items: null,
+      category: guessCategory(it.merchant + ' ' + it.desc) || 'other' };
+    S.expenses.push(ex);
+    enqueue('addExpense', ex);
+    impMark(i, 'split');
+  });
+  persist(); renderAll(); renderImport();
+  toast(`${todo.length} expenses added`);
+}
+
+/** After an expense from a scan or an import is saved: show it back for a quick check. */
+function reviewSaved(ex){
+  openDetail(ex.id, true);
+}
+
 /* ---------------- Excel export ----------------
    A real .xlsx built on the phone, so it works offline and needs no library:
    an .xlsx is a zip of a few XML files. Totals are formulas over the rows
@@ -1881,13 +2501,13 @@ const catOf = id => CATS.find(c => c.id === id) || null;
 
 // Checked in this order, so "train tickets" is transport and "7-Eleven snacks" groceries.
 const CAT_WORDS = [
-  ['groceries',  /grocer|supermarket|woolworths|coles|\baldi\b|7-?eleven|circle ?k|wellcome|park ?n ?shop|convenience|超市|便利/i],
-  ['transport',  /taxi|\buber\b|didi|\bgrab\b|\bcab\b|\bbus\b|train|\bmtr\b|metro|subway|ferry|turbojet|flight|airline|airport|tram|octopus|petrol|fuel|parking|\btolls?\b|car hire|high.?speed|高铁|高鐵|地铁|地鐵|的士|机场|機場/i],
+  ['groceries',  /grocer|supermarket|woolworths|coles|\baldi\b|\biga\b|harris farm|7-?eleven|circle ?k|wellcome|park ?n ?shop|convenience|超市|便利/i],
+  ['transport',  /taxi|\buber\b(?! ?eats)|didi|\bgrab\b|\bopal\b|transportfornsw|myki|qantas|jetstar|virgin aus|cathay|airasia|\bair\b|\bcab\b|\bbus\b|train|\bmtr\b|metro|subway|ferry|turbojet|flight|airline|airport|tram|octopus|petrol|fuel|parking|\btolls?\b|car hire|high.?speed|高铁|高鐵|地铁|地鐵|的士|机场|機場/i],
   ['stay',       /hotel|hostel|airbnb|accommodation|agoda|booking\.com|resort|\binn\b|lodg|酒店|民宿/i],
   ['bills',      /\brent\b|electric|power bill|gas bill|\bwater\b|internet|wi-?fi|phone bill|mobile plan|\bsim\b|insurance|utilit|council|strata|subscription|netflix|spotify/i],
-  ['activities', /ticket|\btours?\b|museum|disney|ocean park|the peak|cable car|\bshow\b|concert|admission|attraction|\bspa\b|massage|cruise|temple|\bzoo\b|aquarium|门票|門票/i],
+  ['activities', /klook|ticket|\btours?\b|museum|disney|ocean park|the peak|cable car|\bshow\b|concert|admission|attraction|\bspa\b|massage|cruise|temple|\bzoo\b|aquarium|门票|門票/i],
   ['shopping',   /\bshop|souvenir|\bgifts?\b|clothes|shoes|\bmall\b|duty.?free|uniqlo|cosmetic|\bsasa\b|watsons/i],
-  ['food',       /dinner|lunch|breakfast|brunch|supper|\bmeals?\b|restaurant|\bcaf[eé]|coffee|\btea\b|\bbar\b|\bbeers?\b|\bwine\b|drinks?|dim sum|yum cha|hot ?pot|noodle|ramen|\bbbq\b|snack|dessert|bakery|egg tart|bubble tea|boba|starbucks|mcdonald|\bkfc\b|\bfood\b|\beat|餐|飯|饭|茶|咖啡|麵|面/i],
+  ['food',       /dumpling|sushi|pizza|burger|kitchen|\bgrill\b|\bthai\b|\bpho\b|uber ?eats|doordash|menulog|\bcafe\b|dinner|lunch|breakfast|brunch|supper|\bmeals?\b|restaurant|\bcaf[eé]|coffee|\btea\b|\bbar\b|\bbeers?\b|\bwine\b|drinks?|dim sum|yum cha|hot ?pot|noodle|ramen|\bbbq\b|snack|dessert|bakery|egg tart|bubble tea|boba|starbucks|mcdonald|\bkfc\b|\bfood\b|\beat|餐|飯|饭|茶|咖啡|麵|面/i],
 ];
 function guessCategory(desc){
   const d = String(desc || '');
@@ -2591,7 +3211,7 @@ function openEdit(id){
   F = {
     id: ex.id, date: ex.date, city: ex.city, cur: ex.currency,
     rateMode: ex.currency === 'AUD' ? 'live' : 'saved', rate: savedRate, curOpen: false,
-    repeat: 'never', until: '', seriesId: ruleIdOf(ex.id), fx: d.fx || null,
+    repeat: 'never', until: '', seriesId: ruleIdOf(ex.id), fx: d.fx || null, ref: d.ref || '',
     category: ex.category || '', catPicked: !!ex.category,
     amount: String(ex.amount_local), desc: ex.description, paid_by: ex.paid_by,
     split_type: ex.split_type || 'equal',
@@ -2781,6 +3401,7 @@ function draftExpense(){
     ex.split_detail = { participants: Array.from(new Set(items.flatMap(i => i.people))) };
   }
   lockFx(ex, F.fx);
+  if (F.importFp || F.ref) ex.split_detail.ref = F.importFp || F.ref;     // the statement line it came from
   ex.category = F.category || '';
   return ex;
 }
@@ -2843,7 +3464,7 @@ function saveExpense(){
       template: { description: ex.description, city: ex.city, paid_by: ex.paid_by, currency: ex.currency,
                   amount_local: ex.amount_local, split_type: ex.split_type,
                   // Each occurrence takes the rate of its own day, not this one's.
-                  split_detail: Object.assign({}, ex.split_detail, { fx: undefined }), items: ex.items,
+                  split_detail: Object.assign({}, ex.split_detail, { fx: undefined, ref: undefined }), items: ex.items,
                   category: ex.category }
     };
     // Due already: add it now under the id the backend would have used.
@@ -2866,8 +3487,11 @@ function saveExpense(){
     enqueue('addExpense', ex);
   }
   PREFS.lastCity = ex.city; save(K_PREFS, PREFS);
+  if (F.importFp && IMP && IMP.items && IMP.items[F.importIdx] && IMP.items[F.importIdx].fp === F.importFp) impMark(F.importIdx, 'split');
   persist(); renderAll();
   closeSheet('exSheet');
+  // From a scan or a statement: show it straight back so a misread is caught now, not at settle-up.
+  if (F.review && S.expenses.some(e => e.id === ex.id)){ reviewSaved(ex); return; }
   toast(repeatMsg || (isNew ? 'Added' : 'Saved'));
 }
 
@@ -2880,7 +3504,7 @@ function deleteExpense(){
 
 /* ---------------- expense detail ---------------- */
 
-function openDetail(id){
+function openDetail(id, review){
   const ex = (S.expenses||[]).find(e => String(e.id) === String(id));
   if (!ex) return;
   const sh = sharesOf(ex);
@@ -2909,7 +3533,11 @@ function openDetail(id){
     ${itemHtml}
     <div class="section-label">Share</div>
     <div class="card">${pPeople().map(p => `<div class="split-line"><span>${esc(p)}</span><b class="mono">${fmtAudC(sh[p]||0)}</b></div>`).join('')}</div>
-    <button class="btn primary full" data-editex="${esc(ex.id)}">Edit</button>`;
+    ${review ? `<div class="stack"><button class="btn primary full" id="revOk">Looks right</button>
+      <button class="btn ghost full" data-editex="${esc(ex.id)}">Edit</button></div>`
+             : `<button class="btn primary full" data-editex="${esc(ex.id)}">Edit</button>`}`;
+  if (review) $('#detBody').insertAdjacentHTML('afterbegin', `<div class="banner warn" style="margin-top:0"><span class="dot pend"></span>
+    <div><b>Check this before moving on.</b> It was read from a ${F && F.importFp ? 'statement' : 'receipt'} — the total, date, category and each share.</div></div>`);
   openSheet('detSheet');
 }
 
@@ -3318,6 +3946,25 @@ document.addEventListener('click', e => {
   if (e.target.id === 'addPerson'){ ensurePED(); PED.push({ orig:null, val:'' }); renderMore(); }
   if (e.target.id === 'cancelPeople'){ PED = null; renderMore(); toast('Changes discarded'); }
   if (e.target.id === 'invNew') openInvite();
+  if (e.target.closest('#btnImport')){ closeSheet('exSheet'); openImport(); return; }
+  if (e.target.id === 'impPick'){ $('#impFiles').click(); return; }
+  if (e.target.id === 'impFinish'){ impFinish(); return; }
+  if (e.target.id === 'impSplitRest'){ impSplitRest(); return; }
+  if (e.target.id === 'impRestart'){ if (confirm('Start a different import? Lines you haven’t dealt with here will come up again next time.')){ IMP = null; save(K_IMP, null); openImport(); } return; }
+  if (e.target.id === 'revOk'){ closeSheet('detSheet'); if (IMP && IMP.items && IMP.items.some(i => i.status === 'todo')) openImport(); else toast('Saved'); return; }
+  const im = e.target.closest('[data-imppid],[data-imppay],[data-impmode],[data-impsplit],[data-imppers],[data-implink],[data-impsettle],[data-impign]');
+  if (im){
+    const d = im.dataset;
+    if (d.imppid){ IMP.pid = d.imppid; renderImport(); }
+    else if (d.imppay){ IMP.payer = d.imppay; renderImport(); }
+    else if (d.impmode){ IMP.mode = d.impmode; renderImport(); }
+    else if (d.impsplit !== undefined) impSplit(+d.impsplit);
+    else if (d.imppers !== undefined){ impMark(+d.imppers, 'personal'); renderImport(); }
+    else if (d.implink !== undefined) impLink(+d.implink);
+    else if (d.impsettle !== undefined) impSettle(+d.impsettle);
+    else if (d.impign !== undefined) impIgnore(+d.impign);
+    return;
+  }
   const fc = e.target.closest('[data-fcat]');
   if (fc){ HF.cat = fc.dataset.fcat; renderHistory(); return; }
   if (e.target.id === 'fDatesClear'){ HF.from = HF.to = ''; renderHistory(); return; }
@@ -3516,6 +4163,11 @@ $('#addCurBtn').addEventListener('click', openAddCurrency);
 $('#curAdd').addEventListener('click', () => addCurrency($('#curCode').value));
 $('#rateClear').addEventListener('click', clearRate);
 $('#paySave').addEventListener('click', savePay);
+$('#impFiles').addEventListener('change', e => {
+  const files = Array.from(e.target.files || []);
+  e.target.value = '';
+  runImport(files);
+});
 $('#invCreate').addEventListener('click', createInvite);
 $('#invCopy').addEventListener('click', () =>
   navigator.clipboard.writeText(INV_LINK).then(() => toast('Link copied'), () => toast("Couldn't copy — press and hold the link")));
@@ -3583,8 +4235,10 @@ function showAiBar(){
   const bar = $('#aiBar');
   if (!bar) return;
   bar.style.display = 'grid';
-  bar.style.gridTemplateColumns = AI_ON ? '' : '1fr';
+  bar.style.gridTemplateColumns = AI_ON ? '1fr 1fr 1fr' : '1fr 1fr';
   $('#btnSay').style.display = AI_ON ? '' : 'none';
+  const left = IMP && IMP.items ? IMP.items.filter(i => i.status === 'todo').length : 0;
+  $('#btnImport').textContent = left ? `🏦 Continue (${left})` : '🏦 Statement';
 }
 
 async function checkAi(){
@@ -3645,6 +4299,7 @@ function applyDraft(d){
   if (d.city && pCities().includes(d.city)) F.city = d.city;
   if (d.currency) setCur(d.currency);
   F.desc         = d.description || F.desc;
+  F.review       = true;
   F.category     = catOf(d.category) ? d.category : (guessCategory(F.desc) || F.category);
   F.catPicked    = !!catOf(d.category);
   F.date         = d.date || F.date;
@@ -3908,6 +4563,7 @@ function wasmSimd(){
 // the two variants in ocr/ are ever requested.
 const ocrCore = () => OCR_BASE + (wasmSimd() ? 'tesseract-core-simd-lstm.wasm.js' : 'tesseract-core-lstm.wasm.js');
 const ocrFiles = () => [OCR_BASE + 'tesseract.min.js', OCR_BASE + 'worker.min.js', ocrCore(),
+  OCR_BASE + 'pdf/pdf.min.mjs', OCR_BASE + 'pdf/pdf.worker.min.mjs',
   ...['eng', 'chi_sim', 'chi_tra'].map(l => OCR_BASE + 'lang/' + l + '.traineddata.gz')];
 
 async function ocrDownloaded(){
@@ -4015,7 +4671,7 @@ $('#ocrGet').addEventListener('click', async () => {
     toast("Download didn't finish — try again on Wi-Fi");
   } finally {
     btn.disabled = false;
-    btn.textContent = 'Download offline reader (10 MB)';
+    btn.textContent = 'Download offline reader (12 MB)';
     renderOcrRow();
   }
 });
