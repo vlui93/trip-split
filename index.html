@@ -292,7 +292,7 @@ body.guest .owner-only{display:none !important}
   </div>
 
   <div id="syncBanner"></div>
-  <div id="confirmBanner"></div>
+  <div id="attnCard"></div>
 
   <div class="card">
     <div class="row between" style="margin-bottom:4px">
@@ -604,6 +604,18 @@ body.guest .owner-only{display:none !important}
     <div class="spin"></div>
     <div class="msg" id="busyMsg">Working…</div>
     <div class="sub2" id="busySub">This takes a few seconds</div>
+  </div>
+</div>
+
+<!-- ============ NEEDS ATTENTION ============ -->
+<div class="sheet" id="attnSheet">
+  <div class="scrim" data-close="attnSheet"></div>
+  <div class="panel">
+    <div class="grab"></div>
+    <div class="sheet-head"><h2>Needs attention</h2><button class="btn sm ghost" data-close="attnSheet">Close</button></div>
+    <div id="attnBody"></div>
+    <p class="sub">Worked out on this phone from what's here. Dismissing a possible duplicate, a missing category or an
+      old waiting payment hides it on this phone only.</p>
   </div>
 </div>
 
@@ -1360,6 +1372,7 @@ const initials = n => String(n||'?').trim().split(/\s+/).map(w=>w[0]).join('').s
 /* ---------------- render: home ---------------- */
 
 function renderSync(){
+  renderAttention();
   const q = QUEUE.length;
   const el = $('#syncBanner');
   $('#queueCount') && ($('#queueCount').textContent = q);
@@ -2701,6 +2714,122 @@ function renderBreakdown(){
       no category yet, so ${guessed > 1 ? 'they’re' : 'it’s'} counted by a guess from the description. Edit ${guessed > 1 ? 'them' : 'it'} to set one.</div>` : ''}`;
 }
 
+/* ---------------- needs attention ----------------
+   One list of everything worth a look, worked out on the phone from what's
+   already here. Each item says what's wrong and offers the way to fix it. */
+
+/* attn:start — pure, exercised by tests/attention.test.mjs */
+/**
+ * d: { expenses (this project), settlements (all), people (this project), me,
+ *      queueErrors, importLeft, today, rateOf(cur), dismissed: {key:1}, catOf(id) }
+ * → [{ key, kind, title, detail, id?, ids?, dismiss? }], most urgent first.
+ */
+function needsAttention(d){
+  const out = [];
+  const day = s => Date.UTC(+s.slice(0, 4), +s.slice(5, 7) - 1, +s.slice(8, 10)) / 864e5;
+  const money = (n, cur) => (cur && cur !== 'AUD' ? cur + ' ' : 'A$') + (Number(n) || 0).toFixed(2);
+  const add = it => { if (!d.dismissed[it.key]) out.push(it); };
+
+  d.settlements.forEach(st => {
+    const amt = money(st.currency && st.currency !== 'AUD' ? st.amount_local : st.amount_aud, st.currency);
+    if (d.me && st.to === d.me && st.status === 'pending')
+      add({ key: 'confirm:' + st.id, kind: 'confirm', id: st.id, title: `Confirm ${st.from}'s payment of ${amt}`, detail: `Logged ${st.date} — did it arrive?` });
+    if (d.me && st.from === d.me && st.status === 'disputed')
+      add({ key: 'disputed:' + st.id, kind: 'disputed', id: st.id, title: `${st.to} says your ${amt} didn't arrive`,
+            detail: st.dispute_note ? `“${st.dispute_note}”` : 'Check with them, then fix or delete it' });
+    if (d.me && st.from === d.me && st.status === 'pending' && day(d.today) - day(st.date) >= 7)
+      add({ key: 'stale:' + st.id, kind: 'stale', id: st.id, dismiss: true, title: `${st.to} hasn't confirmed your ${amt}`,
+            detail: `Waiting since ${st.date}` });
+  });
+  if (d.queueErrors) add({ key: 'sync', kind: 'sync', title: `${d.queueErrors} change${d.queueErrors > 1 ? 's' : ''} couldn't sync`, detail: 'See why, then retry or discard' });
+  if (d.importLeft) add({ key: 'import', kind: 'import', title: `${d.importLeft} statement line${d.importLeft > 1 ? 's' : ''} to review`, detail: 'Your import is waiting where you left it' });
+
+  // Same payer, same amount and currency, within a day: easy to enter twice from two phones.
+  const seen = {};
+  d.expenses.slice().sort((a, b) => String(a.date).localeCompare(String(b.date))).forEach(ex => {
+    const k = ex.paid_by + '|' + ex.currency + '|' + Number(ex.amount_local).toFixed(2);
+    (seen[k] || []).forEach(o => {
+      if (Math.abs(day(String(ex.date)) - day(String(o.date))) > 1) return;
+      const ids = [String(o.id), String(ex.id)].sort();
+      add({ key: 'dup:' + ids.join('+'), kind: 'dup', ids, dismiss: true,
+            title: `Possible duplicate: ${ex.description || 'Expense'}`,
+            detail: `${money(ex.amount_local, ex.currency)} paid by ${ex.paid_by}, entered twice (${o.date}${o.date !== ex.date ? ' and ' + ex.date : ''})` });
+    });
+    (seen[k] = seen[k] || []).push(ex);
+  });
+
+  d.expenses.forEach(ex => {
+    const name = ex.description || 'Expense';
+    if (ex.currency !== 'AUD' && !(Number(ex.amount_aud) > 0) && Number(ex.amount_local) > 0)
+      add({ key: 'norate:' + ex.id, kind: 'norate', id: ex.id, title: `No exchange rate: ${name}`, detail: `${money(ex.amount_local, ex.currency)} isn't counted in AUD yet` });
+    const sd = ex.split_detail || {};
+    const named = [ex.paid_by].concat(sd.participants || [], Object.keys(sd.shares || {}),
+      ...((ex.items && ex.items.items) || []).map(i => i.people || []));
+    const gone = Array.from(new Set(named.filter(n => n && !d.people.includes(n))));
+    if (gone.length)
+      add({ key: 'gone:' + ex.id, kind: 'gone', id: ex.id, title: `${name} includes ${gone.join(', ')}`, detail: 'Not in this project any more — edit the split' });
+    if (!ex.category || !d.catOf(ex.category))
+      add({ key: 'nocat:' + ex.id, kind: 'nocat', id: ex.id, dismiss: true, title: `No category: ${name}`, detail: `${ex.date} · ${money(ex.amount_local, ex.currency)}` });
+  });
+  const order = ['confirm', 'disputed', 'sync', 'import', 'dup', 'norate', 'gone', 'stale', 'nocat'];
+  return out.sort((a, b) => order.indexOf(a.kind) - order.indexOf(b.kind));
+}
+/* attn:end */
+
+const ATTN_ICON = { confirm: '⏳', disputed: '!', stale: '⏳', sync: '⚠', import: '🏦', dup: '⧉', norate: '¤', gone: '👤', nocat: '🏷' };
+const ATTN_DO = { confirm: 'Review', disputed: 'Review', stale: 'Review', sync: 'See why', import: 'Continue', dup: 'Compare', norate: 'Fix', gone: 'Fix', nocat: 'Set' };
+
+function attentionList(){
+  const p = activeProject();
+  return needsAttention({
+    expenses: pExpenses(), settlements: S.settlements || [], people: pPeople(), me: linkPerson() || PREFS.me,
+    queueErrors: QUEUE.filter(j => j.err).length,
+    importLeft: IMP && IMP.items ? IMP.items.filter(i => i.status === 'todo').length : 0,
+    today: today(), dismissed: (PREFS.attnOff || {})[p ? p.id : ''] || {}, catOf,
+  });
+}
+
+/** On Home: the count and the first few; the rest in a sheet. */
+function renderAttention(){
+  const box = $('#attnCard');
+  if (!box) return;
+  const list = attentionList();
+  const row = it => `<div class="split-line" style="align-items:center;gap:10px">
+      <span style="width:22px;text-align:center;flex:none">${ATTN_ICON[it.kind]}</span>
+      <span style="flex:1;min-width:0"><span style="font-weight:620">${esc(it.title)}</span>
+        <span style="display:block;font-size:12.5px;color:var(--muted)">${esc(it.detail)}</span></span>
+      ${it.dismiss ? `<button class="iconbtn" data-attnoff="${esc(it.key)}" title="Dismiss">×</button>` : ''}
+      <button class="btn sm ghost" data-attn="${esc(it.key)}">${ATTN_DO[it.kind]}</button></div>`;
+  box.innerHTML = list.length ? `<div class="card">
+      <div class="row between" style="margin-bottom:4px"><h3 style="font-size:15px">Needs attention</h3>
+        <span class="tag mono">${list.length}</span></div>
+      ${list.slice(0, 3).map(row).join('')}
+      ${list.length > 3 ? `<button class="linkbtn" id="attnAll" style="margin-top:8px">See all ${list.length}</button>` : ''}
+    </div>` : '';
+  if ($('#attnSheet').classList.contains('on')) $('#attnBody').innerHTML = list.length ? `<div class="card">${list.map(row).join('')}</div>`
+    : `<div class="card"><div class="empty"><span class="big">✅</span>Nothing needs attention.</div></div>`;
+}
+
+function attnGo(key){
+  const it = attentionList().find(x => x.key === key);
+  if (!it) return;
+  closeSheet('attnSheet');
+  if (['confirm', 'disputed', 'stale'].includes(it.kind)) go('settle');
+  else if (it.kind === 'sync') go('home');
+  else if (it.kind === 'import') openImport();
+  else if (it.kind === 'dup'){ PREFS.histView = 'list'; HF = { city:'', person:'', cat:'', from:'', to:'' }; go('history');
+    const [a] = it.ids; const ex = S.expenses.find(e => String(e.id) === a); if (ex){ HF.from = HF.to = ex.date; renderHistory(); } }
+  else openEdit(it.id);
+}
+function attnDismiss(key){
+  const p = activeProject(), pid = p ? p.id : '';
+  PREFS.attnOff = PREFS.attnOff || {};
+  PREFS.attnOff[pid] = Object.assign({}, PREFS.attnOff[pid], { [key]: 1 });
+  save(K_PREFS, PREFS);
+  renderAttention();
+  toast('Dismissed');
+}
+
 /* ---------------- settlement confirmation ----------------
    A payment logged by anyone but the person paid waits for them to confirm it
    on their own link. Waiting ones count in balances; disputed ones don't. */
@@ -2731,16 +2860,6 @@ function answerSettlement(id, yes){
   toast(yes ? 'Confirmed — thanks' : 'Marked as not received');
 }
 
-/** On Home: payments to you that are waiting for your answer, across projects. */
-function renderConfirmBanner(){
-  const box = $('#confirmBanner');
-  if (!box) return;
-  const me = linkPerson();
-  const waiting = me ? (S.settlements || []).filter(st => st.to === me && st.status === 'pending') : [];
-  box.innerHTML = waiting.length ? `<div class="banner warn" style="align-items:center"><span class="dot pend"></span>
-    <div class="grow">${waiting.length} payment${waiting.length > 1 ? 's' : ''} to you to confirm</div>
-    <button class="btn sm ghost" data-go="settle">Review</button></div>` : '';
-}
 
 /* ---------------- months ----------------
    History and the settlement log are grouped by month, newest first. Each
@@ -3211,7 +3330,7 @@ function renderMore(){
   renderOcrRow();
 }
 
-function renderAll(){ document.body.classList.toggle('guest', !!GUEST()); renderConfirmBanner(); renderProjectHeader(); renderHome(); renderRecurCard(); renderSync();
+function renderAll(){ document.body.classList.toggle('guest', !!GUEST()); renderAttention(); renderProjectHeader(); renderHome(); renderRecurCard(); renderSync();
   if ($('#s-history').classList.contains('on')) renderHistory();
   if ($('#s-settle').classList.contains('on'))  renderSettle();
   if ($('#s-more').classList.contains('on'))    renderMore();
@@ -4104,6 +4223,9 @@ document.addEventListener('click', e => {
   if (e.target.id === 'cancelPeople'){ PED = null; renderMore(); toast('Changes discarded'); }
   if (e.target.id === 'invNew') openInvite();
   if (e.target.id === 'chAll'){ CH_ALL = true; renderChanges(); return; }
+  if (e.target.id === 'attnAll'){ openSheet('attnSheet'); renderAttention(); return; }
+  const at = e.target.closest('[data-attn],[data-attnoff]');
+  if (at){ at.dataset.attnoff ? attnDismiss(at.dataset.attnoff) : attnGo(at.dataset.attn); return; }
   const sa = e.target.closest('[data-stok],[data-stno]');
   if (sa){ answerSettlement(sa.dataset.stok || sa.dataset.stno, !!sa.dataset.stok); return; }
   const rs = e.target.closest('[data-restore]');
