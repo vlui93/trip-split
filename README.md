@@ -99,7 +99,22 @@ without a token they cannot read or write anything.
 `resetToken()` and reconnect each phone. Everyone holding the main token has
 full access to that Sheet.
 
-**Invite links are the exception.** Each one carries its own token, stored in
+**Per-person links.** Each person in the core group can have their own
+**full-access** link (Settings → Links and invites → Access: Full access). It
+can see and change everything, like the main link, but every change made with
+it is recorded under that person's name: in the Changes tab, and in each
+expense's "Added by" and "Last changed" fields. Those are set by the server
+from the link used, never by the phone. To move the group over:
+
+1. Make a full-access link for each of you, yourself included.
+2. Each person opens their own link on their phone. In the home-screen app,
+   they paste it into the Connect screen. Check that Settings → Recent changes
+   shows "You're using …'s own link".
+3. Once everyone is switched, run `resetToken()` in the script editor if you want
+   the old shared link to stop working. Do this last: a phone still on the main
+   link is locked out once the token is reset.
+
+**Guest links are the exception.** Each one carries its own token, stored in
 the `Access` tab and tied to one person and the projects you picked. The server
 checks it on every request and sends that phone only those projects, and within
 them only the expenses and settlements that person is part of. Nothing else
@@ -252,6 +267,16 @@ total follows. Both are rebuilt on the first sync after any change, or from the
 Sheet's **Trip Split → Rebuild Report and Summary** menu. Don't edit them by
 hand: a rebuild overwrites everything except the three picker cells.
 
+### Change log
+
+Every change is recorded in the Sheet's **Changes** tab, and rows are only ever
+added there. Each row has when, who, what, a one-line summary ("Changed "Dim sum":
+amount_aud 120 → 130"), and the item before and after as JSON. That means a
+deleted expense can always be found again. A phone re-sending something that
+already landed is not recorded, so the log isn't cluttered with retries. Invite
+links appear only as their first six characters. Full-access phones show the
+newest 40 entries under **Settings → Recent changes**.
+
 ### Settle up
 
 The app works out the fewest transfers that clear every balance by matching
@@ -400,11 +425,12 @@ shows a warning first.
 |---|---|
 | `Projects` | id, name, start_date, end_date, currencies, cities, members, archived |
 | `People` | name, currency (blank = AUD) |
-| `Expenses` | id, date, city, description, paid_by, currency, amount_local, amount_aud, split_type, split_detail_json, item_breakdown_json, project_id, category |
+| `Expenses` | id, date, city, description, paid_by, currency, amount_local, amount_aud, split_type, split_detail_json, item_breakdown_json, project_id, category, created_by, updated_by, updated_at |
 | `ExchangeRates` | currency, rate_to_aud, last_updated, is_manual_override |
-| `Settlements` | id, from, to, amount_aud, date, note, project_id, currency, amount_local |
+| `Settlements` | id, from, to, amount_aud, date, note, project_id, currency, amount_local, created_by, created_at |
 | `Recurring` | id, project_id, kind, frequency, start_date, end_date, generated_through, paused, template_json |
-| `Access` | token, person, project_ids, created, revoked (one row per invite link) |
+| `Access` | token, person, project_ids, created, revoked, role (`guest` or `member`; one row per link) |
+| `Changes` | when, who, action, type, id, summary, before_json, after_json (append-only) |
 | `Report` | generated: one row per expense with each person's share (rebuilt, don't edit) |
 | `Summary` | generated: totals as formulas over Report, driven by a project and date picker |
 
@@ -461,6 +487,6 @@ no rows.
 |---|---|
 | `index.html` | The whole frontend: markup, styles and logic |
 | `Code.gs` | Apps Script backend |
-| `tests/` | `node tests/<name>.test.mjs`: receipt parsing, the currency ledger, categories and the breakdown, the Excel export, the Report tab, statement import, and invite access control (runs `Code.gs` against a fake Sheet in `fake-gas.mjs`) |
+| `tests/` | `node tests/<name>.test.mjs`: receipt parsing, the currency ledger, categories and the breakdown, the Excel export, the Report tab, statement import, invite access control, and the change log (runs `Code.gs` against a fake Sheet in `fake-gas.mjs`) |
 | `manifest.webmanifest` | Web app manifest |
 | `icon-*-v2.png`, `mkicon.py`, `icon.svg` | Home-screen icons and the script that generates them |

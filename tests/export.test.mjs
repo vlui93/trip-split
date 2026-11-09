@@ -60,7 +60,7 @@ t('expenses sheet: a row each, shares add up, totals follow the filter', () => {
   const tot = rows[6][10];
   assert.equal(tot.f, 'SUBTOTAL(109,K2:K5)');
   assert.ok(Math.abs(tot.v - rows.slice(1, 5).reduce((a, r) => a + val(r[10]), 0)) < 0.005);
-  assert.equal(sheet('Expenses').filter, 'A1:Q5');   // 11 columns + 3 shares + total, check, ID
+  assert.equal(sheet('Expenses').filter, 'A1:T5');   // 11 columns + 3 shares + total, check, ID, added/changed by, changed at
 });
 
 t('summary: totals by category, month and person agree with the rows', () => {

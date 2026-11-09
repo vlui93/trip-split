@@ -381,11 +381,16 @@ body.guest .owner-only{display:none !important}
   <div class="card stack" id="peopleBox"></div>
   <div class="card" id="meBox"></div>
 
-  <div class="section-label">Invites</div>
+  <div class="section-label">Links and invites</div>
   <div class="card stack" id="inviteBox"></div>
   <p class="sub">An invite link lets someone use the app on their own phone. They see only the projects you pick,
     and only the expenses they're part of. They can add and edit their own expenses and log their own
-    settlements, but can't change people, rates or projects. Turning a link off takes effect on their next sync.</p>
+    settlements, but can't change people, rates or projects. Turning a link off takes effect on their next sync.
+    A full-access link is for the core group: everything, as on the main link, with each change recorded under that person's name.</p>
+
+  <div class="section-label">Recent changes</div>
+  <div class="card" id="changesBox"></div>
+  <p class="sub">Every change is also recorded in the Sheet's Changes tab, with what it was before and after — so a deleted expense can be found again.</p>
   </div>
 
   <div class="section-label">Connection</div>
@@ -1244,7 +1249,7 @@ function enqueue(action, payload){
 function persist(){ save(K_STATE, S); }
 
 // The backend version this app needs. Older backends get a plain "redeploy" message.
-const API_NEEDED = 6;
+const API_NEEDED = 7;
 let BACKEND_OLD = false;
 
 function friendlyError(msg){
@@ -1263,9 +1268,11 @@ function applyBootstrap(d){
         // rules rather than replacing them with nothing.
         recurring: Array.isArray(d.recurring) ? d.recurring : (S.recurring || []),
         personCur: d.personCur || {}, invites: d.invites || [], guest: d.guest || null,
+        whoami: d.whoami || null, changes: d.changes || [],
         serverDate:d.serverDate||'' };
-  // On an invite, "you" is whoever the invite is for.
-  if (S.guest && PREFS.me !== S.guest.person){ PREFS.me = S.guest.person; save(K_PREFS, PREFS); }
+  // On someone's own link, "you" is whoever the link is for.
+  const mine = (S.whoami && S.whoami.person) || (S.guest && S.guest.person);
+  if (mine && PREFS.me !== mine){ PREFS.me = mine; save(K_PREFS, PREFS); }
 }
 
 async function sync(force){
@@ -1309,6 +1316,9 @@ async function sync(force){
   } finally {
     syncing = false; renderSync();
   }
+  // Something queued while this sync ran (a fix-up it made, or a tap mid-sync) goes now,
+  // not at the next trigger. Rejected ones carry .err and wait for Retry instead.
+  if (!lastSyncErr && QUEUE.some(j => !j.err)) setTimeout(() => sync(), 0);
 }
 
 /* ---------------- shell ---------------- */
@@ -2385,7 +2395,7 @@ function exportWorkbook(d){
   // ---- Expenses: one row each, every person's share, and a check that the shares add up.
   const exRows = [[head('Date'), head('Month'), head('Place'), head('Category'), head('Description'), head('Paid by'),
     head('Split'), head('Currency'), head('Amount'), head('Rate (per 1 AUD)'), head('Amount (AUD)')]
-    .concat(people.map(p => head('Share: ' + p)), [head('Shares total'), head('Check'), head('ID')])];
+    .concat(people.map(p => head('Share: ' + p)), [head('Shares total'), head('Check'), head('ID'), head('Added by'), head('Changed by'), head('Changed at')])];
   const sums = { aud: 0, per: people.map(() => 0) };
   d.expenses.forEach((ex, i) => {
     const r = i + 2, sh = d.shares(ex), aud = Math.round((Number(ex.amount_aud) || 0) * 100);
@@ -2398,14 +2408,15 @@ function exportWorkbook(d){
       { v: Number(ex.amount_local) || 0, s: 'money' }, { v: Math.round(rate * 1e4) / 1e4, s: 'rate' }, { v: r2(aud), s: 'money' }]
       .concat(shareC.map(c => ({ v: r2(c), s: 'money' })),
         [{ v: r2(tot), s: 'money', f: `SUM(${shareCol(0)}${r}:${shareCol(people.length - 1)}${r})` },
-         { v: r2(aud - tot), s: 'money', f: `ROUND(${K}${r}-${totalCol}${r},2)` }, ex.id]));
+         { v: r2(aud - tot), s: 'money', f: `ROUND(${K}${r}-${totalCol}${r},2)` }, ex.id,
+         ex.created_by || '', ex.updated_by || '', ex.updated_at || '']));
   });
   const tr = last + 2;                                  // a blank row, then totals that follow the filter
   const sub = (col, c) => ({ v: r2(c), s: 'tmoney', f: `SUBTOTAL(109,${col}2:${col}${last})` });
   exRows.push([]);
   exRows.push([{ v: 'Total (rows shown)', s: 'bold' }, '', '', '', '', '', '', '', '', '', sub(K, sums.aud)]
     .concat(people.map((p, j) => sub(shareCol(j), sums.per[j])), [sub(totalCol, sums.per.reduce((a, c) => a + c, 0))]));
-  const lastCol = xlCol(13 + people.length);
+  const lastCol = xlCol(16 + people.length);
 
   // ---- Settlements
   const st = d.settlements;
@@ -2477,7 +2488,7 @@ function exportWorkbook(d){
   return [
     { name: 'Summary', rows: sm, cols: [30, 16, 18, 16] },
     { name: 'Expenses', rows: exRows, freeze: 1, filter: `A1:${lastCol}${Math.max(last, 2)}`,
-      cols: [11, 9, 13, 15, 30, 11, 9, 9, 12, 14, 13].concat(people.map(() => 13), [13, 9, 20]) },
+      cols: [11, 9, 13, 15, 30, 11, 9, 9, 12, 14, 13].concat(people.map(() => 13), [13, 9, 20, 12, 12, 16]) },
     { name: 'Settlements', rows: stRows, freeze: 1, filter: `A1:I${Math.max(sLast, 2)}`, cols: [11, 9, 12, 12, 9, 12, 13, 24, 20] },
     { name: 'Balances', rows: bl, cols: [18, 16, 12, 14] },
   ];
@@ -3116,6 +3127,7 @@ function renderMore(){
 
   renderInvites();
   renderGuestBox();
+  renderChanges();
 
   $('#meBox').innerHTML =
     `<label class="fl">Which one is you?</label>
@@ -3529,6 +3541,8 @@ function openDetail(id, review){
       ${ex.category && catOf(ex.category) ? `<div class="split-line"><span>Category</span><b>${catOf(ex.category).icon} ${esc(catOf(ex.category).label)}</b></div>` : ''}
       <div class="split-line"><span>Split</span><b>${esc(splitLabel(ex.split_type))}</b></div>
       <div class="split-line"><span>Rate used</span><b class="mono">${rate ? esc(fmtPerAud(ex.currency, rate)) : '—'}</b></div>
+      ${ex.created_by ? `<div class="split-line"><span>Added by</span><b>${esc(ex.created_by)}</b></div>` : ''}
+      ${ex.updated_by && (ex.updated_by !== ex.created_by || ex.updated_at) ? `<div class="split-line"><span>Last changed</span><b>${esc(ex.updated_by)}${ex.updated_at ? ' · ' + esc(ex.updated_at) : ''}</b></div>` : ''}
     </div>
     ${itemHtml}
     <div class="section-label">Share</div>
@@ -3726,7 +3740,7 @@ function renderInvites(){
     <div class="row" style="gap:10px">
       <div class="av">${esc(initials(i.person))}</div>
       <div class="grow" style="min-width:0"><div style="font-weight:650">${esc(i.person)}</div>
-        <div style="font-size:12.5px;color:var(--muted)">${esc(i.project_ids.map(pname).join(', '))} · settles in ${esc(settleCur(i.person))}</div></div>
+        <div style="font-size:12.5px;color:var(--muted)">${i.role === 'member' ? 'Full access' : esc(i.project_ids.map(pname).join(', '))} · settles in ${esc(settleCur(i.person))}</div></div>
       <button class="btn sm ghost" data-invlink="${esc(i.token)}">Link</button>
       <button class="iconbtn" data-invoff="${esc(i.token)}" title="Turn off">×</button>
     </div>`).join('')
@@ -3735,22 +3749,30 @@ function renderInvites(){
 
 function openInvite(){
   const act = activeProject();
-  INV = { person:'', newName:'', projects: act ? [act.id] : [], cur:'' };
+  INV = { person:'', newName:'', projects: act ? [act.id] : [], cur:'', role:'guest' };
   renderInviteForm();
   openSheet('invSheet');
 }
 
 function renderInviteForm(){
-  const people = S.people.filter(n => n !== PREFS.me);
+  // Your own link is worth making too: changes then carry your name instead of "Main link".
+  const people = S.people.filter(n => INV.role === 'member' || n !== PREFS.me);
   const cur = INV.cur || (INV.person && INV.person !== '+' ? settleCur(INV.person) : BASE);
   $('#invBody').innerHTML = `
+    <div><label class="fl">Access</label>
+      <div class="chips"><button class="chip ${INV.role==='member'?'on':''}" data-invrole="member">Full access</button>
+        <button class="chip ${INV.role==='guest'?'on':''}" data-invrole="guest">Guest</button></div>
+      <div style="font-size:12.5px;color:var(--muted);margin-top:6px">${INV.role === 'member'
+        ? 'Sees and changes everything, like the main link — but every change is recorded under their name. For the core group, you included.'
+        : 'Sees only the projects you pick, and only the expenses they’re part of.'}</div>
+    </div>
     <div><label class="fl">Who</label>
       <div class="chips">${people.map(n => `<button class="chip ${INV.person===n?'on':''}" data-invwho="${esc(n)}">${esc(n)}</button>`).join('')}
         <button class="chip ${INV.person==='+'?'on':''}" data-invwho="+">+ Someone new</button></div>
       ${INV.person === '+' ? `<input id="invName" type="text" placeholder="Their name" autocapitalize="words"
           autocorrect="off" value="${esc(INV.newName)}" style="margin-top:8px">` : ''}
     </div>
-    <div><label class="fl">Projects they can see</label>
+    <div${INV.role === 'member' ? ' style="display:none"' : ''}><label class="fl">Projects they can see</label>
       <div class="chips">${projects().map(p => `<button class="chip ${INV.projects.includes(p.id)?'on':''}" data-invproj="${esc(p.id)}">${esc(p.name)}</button>`).join('')}</div>
       <div style="font-size:12.5px;color:var(--muted);margin-top:6px">They join these projects if they aren't in them already.
         Inside, they only see expenses they're part of.</div>
@@ -3767,7 +3789,7 @@ function renderInviteForm(){
 function createInvite(){
   const name = INV.person === '+' ? INV.newName.trim() : INV.person;
   if (!name){ toast('Pick who to invite'); return; }
-  if (!INV.projects.length){ toast('Pick at least one project'); return; }
+  if (!INV.projects.length && INV.role !== 'member'){ toast('Pick at least one project'); return; }
   const isNew = !S.people.includes(name);
   if (isNew && S.people.some(n => n.toLowerCase() === name.toLowerCase())){ toast('Someone already has that name'); return; }
   const cur = INV.cur || settleCur(name);
@@ -3778,7 +3800,7 @@ function createInvite(){
     enqueue('setPeople', { people: S.people.slice() });
     PED = null;
   }
-  INV.projects.forEach(id => {
+  (INV.role === 'member' ? [] : INV.projects).forEach(id => {
     const pr = projectById(id);
     if (pr && !(pr.members || []).includes(name)){
       pr.members = (pr.members || []).concat([name]);
@@ -3790,7 +3812,8 @@ function createInvite(){
     if (cur === BASE) delete S.personCur[name]; else S.personCur[name] = cur;
     enqueue('setPersonCurrency', { name, currency: cur });
   }
-  const inv = { token: newToken(), person: name, project_ids: INV.projects.slice(), created: today(), revoked: false };
+  const inv = { token: newToken(), person: name, project_ids: INV.role === 'member' ? [] : INV.projects.slice(),
+                created: today(), revoked: false, role: INV.role };
   S.invites = (S.invites || []).concat([inv]);
   enqueue('createInvite', inv);
   persist(); renderAll(); renderMore();
@@ -3817,6 +3840,24 @@ function revokeInvite(token){
   enqueue('revokeInvite', { token });
   persist(); renderMore(); toast('Invite turned off');
 }
+
+/** Who this phone is, and the newest entries of the change log. */
+function renderChanges(){
+  const box = $('#changesBox');
+  if (!box) return;
+  const w = S.whoami || {};
+  const me = w.role === 'member' ? `You're using <b>${esc(w.person)}</b>'s own link, so your changes carry that name.`
+           : w.role === 'main' ? `You're on the <b>main link</b>, so your changes show as “Main link”. Make yourself a full-access link under Links and invites to put your name on them.`
+           : '';
+  const list = (S.changes || []).slice(0, CH_ALL ? 40 : 12);
+  box.innerHTML = (me ? `<div style="font-size:13px;color:var(--muted);margin-bottom:10px">${me}</div>` : '')
+    + (list.length ? list.map(c => `<div class="split-line" style="align-items:flex-start;gap:10px">
+        <span style="flex:1;min-width:0"><span style="font-weight:620">${esc(c.who)}</span> · ${esc(c.summary)}</span>
+        <span style="color:var(--muted);font-size:12px;white-space:nowrap">${esc(String(c.when).slice(5))}</span></div>`).join('')
+      : `<div class="empty" style="padding:18px">No changes recorded yet. They appear here after the next sync.</div>`)
+    + ((S.changes || []).length > 12 && !CH_ALL ? `<button class="linkbtn" id="chAll" style="margin-top:8px">Show more</button>` : '');
+}
+let CH_ALL = false;
 
 const standalone = () => navigator.standalone === true || matchMedia('(display-mode: standalone)').matches;
 
@@ -3946,6 +3987,7 @@ document.addEventListener('click', e => {
   if (e.target.id === 'addPerson'){ ensurePED(); PED.push({ orig:null, val:'' }); renderMore(); }
   if (e.target.id === 'cancelPeople'){ PED = null; renderMore(); toast('Changes discarded'); }
   if (e.target.id === 'invNew') openInvite();
+  if (e.target.id === 'chAll'){ CH_ALL = true; renderChanges(); return; }
   if (e.target.closest('#btnImport')){ closeSheet('exSheet'); openImport(); return; }
   if (e.target.id === 'impPick'){ $('#impFiles').click(); return; }
   if (e.target.id === 'impFinish'){ impFinish(); return; }
@@ -3996,7 +4038,7 @@ document.addEventListener('click', e => {
   if (e.target.id === 'guestCopy'){
     navigator.clipboard.writeText(inviteLink(CFG.token)).then(() => toast('Link copied'), () => toast("Couldn't copy"));
   }
-  const ib = e.target.closest('[data-invwho],[data-invproj],[data-invcur],[data-invaddcur],[data-invlink],[data-invoff]');
+  const ib = e.target.closest('[data-invwho],[data-invproj],[data-invcur],[data-invaddcur],[data-invlink],[data-invoff],[data-invrole]');
   if (!ib) return;
   const d = ib.dataset;
   if (d.invwho !== undefined){ INV.person = d.invwho; INV.cur = ''; renderInviteForm();
@@ -4007,6 +4049,7 @@ document.addEventListener('click', e => {
     renderInviteForm();
   }
   else if (d.invcur){ INV.cur = d.invcur; renderInviteForm(); }
+  else if (d.invrole){ INV.role = d.invrole; renderInviteForm(); }
   else if (d.invaddcur){ openAddCurrency(); }
   else if (d.invlink){ const inv = (S.invites || []).find(i => i.token === d.invlink); if (inv) showInviteLink(inv); }
   else if (d.invoff){ revokeInvite(d.invoff); }
