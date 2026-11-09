@@ -229,6 +229,7 @@ select{background-image:linear-gradient(45deg,transparent 50%,var(--muted) 50%),
 .banner.warn{background:var(--warn-soft);color:var(--warn)}
 .banner.bad{background:var(--neg-soft);color:var(--neg)}
 .banner.ok{background:var(--pos-soft);color:var(--pos)}
+.toast-undo{float:right;margin-left:12px;font-weight:750;color:inherit;text-decoration:underline;text-underline-offset:3px}
 .toast{position:fixed;left:16px;right:16px;bottom:calc(var(--nav-h) + 12px);z-index:90;background:var(--text);color:var(--bg);padding:13px 15px;border-radius:13px;font-size:14px;font-weight:600;box-shadow:0 10px 30px -8px rgba(0,0,0,.5);opacity:0;visibility:hidden;transform:translateY(24px) scale(.96);transition:opacity .2s,transform .26s cubic-bezier(.2,.8,.25,1),visibility .26s}
 .toast.on{opacity:1;visibility:visible;transform:none}
 .dot{width:8px;height:8px;border-radius:50%;background:var(--faint);flex:none}
@@ -387,6 +388,9 @@ body.guest .owner-only{display:none !important}
     and only the expenses they're part of. They can add and edit their own expenses and log their own
     settlements, but can't change people, rates or projects. Turning a link off takes effect on their next sync.
     A full-access link is for the core group: everything, as on the main link, with each change recorded under that person's name.</p>
+
+  <div class="section-label">Recently deleted</div>
+  <div class="card" id="deletedBox"></div>
 
   <div class="section-label">Recent changes</div>
   <div class="card" id="changesBox"></div>
@@ -1196,6 +1200,7 @@ function replayQueue(){
     else if (a === 'deleteExpense') S.expenses = drop(S.expenses, p.id);
     else if (a === 'addSettlement') upsert(S.settlements, p);
     else if (a === 'deleteSettlement') S.settlements = drop(S.settlements, p.id);
+    else if (a === 'restoreDeleted' && p.item) applyRestore(p.type, p.item);
     else if (a === 'addRecurring' || a === 'updateRecurring') upsert(S.recurring, p);
     else if (a === 'deleteRecurring') S.recurring = drop(S.recurring, p.id);
     else if (a === 'addProject' || a === 'updateProject') upsert(S.projects, p);
@@ -1249,7 +1254,7 @@ function enqueue(action, payload){
 function persist(){ save(K_STATE, S); }
 
 // The backend version this app needs. Older backends get a plain "redeploy" message.
-const API_NEEDED = 7;
+const API_NEEDED = 8;
 let BACKEND_OLD = false;
 
 function friendlyError(msg){
@@ -1268,7 +1273,7 @@ function applyBootstrap(d){
         // rules rather than replacing them with nothing.
         recurring: Array.isArray(d.recurring) ? d.recurring : (S.recurring || []),
         personCur: d.personCur || {}, invites: d.invites || [], guest: d.guest || null,
-        whoami: d.whoami || null, changes: d.changes || [],
+        whoami: d.whoami || null, changes: d.changes || [], deleted: d.deleted || [],
         serverDate:d.serverDate||'' };
   // On someone's own link, "you" is whoever the link is for.
   const mine = (S.whoami && S.whoami.person) || (S.guest && S.guest.person);
@@ -1336,9 +1341,12 @@ function go(name){
 function openSheet(id){ $('#'+id).classList.add('on'); document.body.style.overflow='hidden'; }
 function closeSheet(id){ $('#'+id).classList.remove('on'); document.body.style.overflow=''; }
 let toastT;
-function toast(msg){
-  const t = $('#toast'); t.textContent = msg; t.classList.add('on');
-  clearTimeout(toastT); toastT = setTimeout(() => t.classList.remove('on'), 2400);
+function toast(msg, undo){
+  const t = $('#toast');
+  t.innerHTML = esc(msg) + (undo ? '<button class="toast-undo" id="toastUndo">Undo</button>' : '');
+  if (undo) $('#toastUndo').onclick = () => { t.classList.remove('on'); undo(); };
+  t.classList.add('on');
+  clearTimeout(toastT); toastT = setTimeout(() => t.classList.remove('on'), undo ? 6000 : 2400);
 }
 const initials = n => String(n||'?').trim().split(/\s+/).map(w=>w[0]).join('').slice(0,2).toUpperCase();
 
@@ -3011,11 +3019,9 @@ function savePeople(){
     });
     (S.settlements || []).forEach(st => {
       if (map[st.from] || map[st.to]){
-        const old = st.id;
         st.from = map[st.from] || st.from;
         st.to   = map[st.to]   || st.to;
-        enqueue('deleteSettlement', { id: old });   // no updateSettlement action; replace it
-        enqueue('addSettlement', st);
+        enqueue('addSettlement', st);                // upserts by id, so nothing is deleted
         touched++;
       }
     });
@@ -3128,6 +3134,7 @@ function renderMore(){
   renderInvites();
   renderGuestBox();
   renderChanges();
+  renderDeleted();
 
   $('#meBox').innerHTML =
     `<label class="fl">Which one is you?</label>
@@ -3509,9 +3516,41 @@ function saveExpense(){
 
 function deleteExpense(){
   if (!F.id) return;
+  const ex = S.expenses.find(e => String(e.id) === String(F.id));
   S.expenses = S.expenses.filter(e => String(e.id) !== String(F.id));
   enqueue('deleteExpense', { id:F.id });
-  persist(); renderAll(); closeSheet('exSheet'); toast('Deleted');
+  persist(); renderAll(); closeSheet('exSheet');
+  toast('Deleted', ex ? () => restoreItem('expense', ex) : null);
+}
+
+/**
+ * Bring something back from the Deleted tab. It reappears here at once; the
+ * queued restore runs after the delete it undoes, and a restore of something
+ * that never left (the delete hadn't reached the Sheet) does nothing.
+ */
+function restoreItem(type, item){
+  enqueue('restoreDeleted', { type, id: item.id, item });
+  applyRestore(type, item);
+  persist(); renderAll(); if ($('#s-more').classList.contains('on')) renderMore();
+  if ($('#s-settle').classList.contains('on')) renderSettle();
+  toast('Restored');
+}
+function applyRestore(type, item){
+  const up = (list, x) => { const i = list.findIndex(y => String(y.id) === String(x.id)); if (i >= 0) list[i] = x; else list.push(x); };
+  if (type === 'expense') up(S.expenses, item);
+  else if (type === 'settlement') up(S.settlements, item);
+  else if (type === 'project'){
+    up(S.projects, item);
+    // A project comes back with everything deleted alongside it.
+    const d = (S.deleted || []).find(x => x.type === 'project' && x.id === item.id);
+    (S.deleted || []).filter(x => d && d.batch && x.batch === d.batch && x.type !== 'project').forEach(x => {
+      if (x.type === 'expense') up(S.expenses, x.item);
+      else if (x.type === 'settlement') up(S.settlements, x.item);
+      else if (x.type === 'recurring') up(S.recurring, x.item);
+    });
+    if (d && d.batch) S.deleted = S.deleted.filter(x => x.batch !== d.batch);
+  }
+  S.deleted = (S.deleted || []).filter(x => !(x.type === type && x.id === String(item.id)));
 }
 
 /* ---------------- expense detail ---------------- */
@@ -3693,9 +3732,11 @@ function savePay(){
 }
 
 function unsettle(id){
+  const st = (S.settlements||[]).find(s => String(s.id) === String(id));
   S.settlements = (S.settlements||[]).filter(s => String(s.id) !== String(id));
   enqueue('deleteSettlement', { id });
-  persist(); renderAll(); renderSettle(); toast('Settlement removed');
+  persist(); renderAll(); renderSettle();
+  toast('Settlement removed', st ? () => restoreItem('settlement', st) : null);
 }
 
 /* ============================================================
@@ -3859,6 +3900,24 @@ function renderChanges(){
 }
 let CH_ALL = false;
 
+/** What's been deleted and not restored, newest first. Kept in the Sheet's Deleted tab. */
+function renderDeleted(){
+  const box = $('#deletedBox');
+  if (!box) return;
+  const all = S.deleted || [];
+  // Items deleted along with a project come back with it, so they show under the project.
+  const shown = all.filter(d => !(d.batch && d.type !== 'project' && all.some(x => x.type === 'project' && x.batch === d.batch)));
+  const inBatch = d => d.type === 'project' && d.batch ? all.filter(x => x.batch === d.batch && x !== d).length : 0;
+  box.innerHTML = shown.length ? shown.slice(0, 25).map(d => {
+    const extra = inBatch(d);
+    return `<div class="split-line" style="align-items:center;gap:10px">
+      <span style="flex:1;min-width:0">${esc(d.summary)}${extra ? ` <span style="color:var(--muted)">and ${extra} item${extra > 1 ? 's' : ''} in it</span>` : ''}
+        <span style="display:block;font-size:12px;color:var(--muted)">${esc(d.deleted_by)} · ${esc(String(d.deleted_at).slice(5))}</span></span>
+      <button class="btn sm ghost" data-restore="${esc(d.type)}|${esc(d.id)}">Restore</button></div>`;
+  }).join('')
+    : `<div class="empty" style="padding:18px">Nothing deleted. Anything deleted from now on can be restored here.</div>`;
+}
+
 const standalone = () => navigator.standalone === true || matchMedia('(display-mode: standalone)').matches;
 
 function renderGuestBox(){
@@ -3988,6 +4047,13 @@ document.addEventListener('click', e => {
   if (e.target.id === 'cancelPeople'){ PED = null; renderMore(); toast('Changes discarded'); }
   if (e.target.id === 'invNew') openInvite();
   if (e.target.id === 'chAll'){ CH_ALL = true; renderChanges(); return; }
+  const rs = e.target.closest('[data-restore]');
+  if (rs){
+    const [type, id] = rs.dataset.restore.split('|');
+    const d = (S.deleted || []).find(x => x.type === type && x.id === id);
+    if (d && d.item) restoreItem(type, d.item);
+    return;
+  }
   if (e.target.closest('#btnImport')){ closeSheet('exSheet'); openImport(); return; }
   if (e.target.id === 'impPick'){ $('#impFiles').click(); return; }
   if (e.target.id === 'impFinish'){ impFinish(); return; }

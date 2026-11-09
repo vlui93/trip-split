@@ -20,6 +20,7 @@ var SHEET_PROJECTS    = 'Projects';
 var SHEET_RECURRING   = 'Recurring';
 var SHEET_ACCESS      = 'Access';
 var SHEET_CHANGES     = 'Changes';
+var SHEET_DELETED     = 'Deleted';
 
 // Quick categories for the spending breakdown. Blank means not chosen yet.
 var CATEGORIES = ['food', 'transport', 'stay', 'activities', 'shopping', 'groceries', 'bills', 'other'];
@@ -31,7 +32,7 @@ var DEFAULT_CURRENCIES = ['AUD'];
 
 // Bump when the app starts relying on something new here. The app compares it and
 // says "redeploy" in plain words instead of failing on an unknown action.
-var API_VERSION = 7;
+var API_VERSION = 8;
 
 /** Every currency the sheet knows about. AUD is always first and always present. */
 function CURRENCIES() {
@@ -62,6 +63,9 @@ HEADERS[SHEET_PROJECTS]    = ['id', 'name', 'start_date', 'end_date',
 HEADERS[SHEET_ACCESS]      = ['token', 'person', 'project_ids', 'created', 'revoked', 'role'];
 // One row per change, never edited: who, when, what, and the before and after.
 HEADERS[SHEET_CHANGES]     = ['when', 'who', 'action', 'type', 'id', 'summary', 'before_json', 'after_json'];
+// Everything deleted, kept whole so it can be restored. Rows stay; a restore is stamped on them.
+HEADERS[SHEET_DELETED]     = ['deleted_at', 'deleted_by', 'type', 'id', 'project_id', 'summary', 'item_json',
+                              'batch', 'restored_at', 'restored_by'];
 
 /* ------------------------------------------------------------------ *
  * One-time setup
@@ -292,11 +296,13 @@ function handle(e, req) {
       case 'deleteProject':out = { id: deleteProject(payload.id) }; break;
       case 'addSettlement':out = { settlement: addSettlement(payload) }; break;
       case 'deleteSettlement': out = { id: deleteSettlement(payload.id) }; break;
+      case 'restoreDeleted': out = { restored: restoreDeleted(payload.type, payload.id) }; break;
       default: return json({ ok: false, error: 'Unknown action: ' + action });
     }
     if (action === 'bootstrap') {
       out.whoami = { person: who.person || '', role: who.member ? 'member' : 'main' };
       out.changes = recentChanges(40);
+      out.deleted = recentlyDeleted(50);
     }
     logChange(action, payload, before);
     afterRequest(action);
@@ -538,18 +544,17 @@ function deleteProject(id) {
   if (getProjects().length < 2) throw new Error('Keep at least one project.');
 
   // Recurring rules go too, or they would keep generating into a deleted project.
-  [SHEET_EXPENSES, SHEET_SETTLEMENTS, SHEET_RECURRING].forEach(function (name) {
-    var sh = sheet(name);
-    var last = sh.getLastRow();
-    if (last < 2) return;
-    var col = HEADERS[name].indexOf('project_id') + 1;
-    var vals = sh.getRange(2, col, last - 1, 1).getValues();
-    for (var i = vals.length - 1; i >= 0; i--) {         // bottom-up so indices hold
-      if (String(vals[i][0]) === String(id)) sh.deleteRow(i + 2);
-    }
-  });
-
-  sheet(SHEET_PROJECTS).deleteRow(r);
+  // Everything goes to the Deleted tab as one batch, so restoring the project brings it all back.
+  var batch = 'del' + Date.now();
+  var project = getProjects().filter(function (p) { return p.id === String(id); })[0];
+  getExpenses().filter(function (e) { return e.project_id === String(id); })
+    .forEach(function (e) { deleteExpense(e.id, batch); });
+  getSettlements().filter(function (x) { return x.project_id === String(id); })
+    .forEach(function (x) { deleteSettlement(x.id, batch); });
+  getRecurring().filter(function (x) { return x.project_id === String(id); })
+    .forEach(function (x) { deleteRecurring(x.id, batch); });
+  if (project) keepDeleted('project', project, batch);
+  sheet(SHEET_PROJECTS).deleteRow(findRowById(SHEET_PROJECTS, id));
   return id;
 }
 
@@ -668,9 +673,12 @@ function saveRecurring(p, isNew) {
 }
 
 /** Stops future occurrences. Ones already created are real money and stay. */
-function deleteRecurring(id) {
+function deleteRecurring(id, batch) {
   var r = findRowById(SHEET_RECURRING, id);
-  if (r > 0) sheet(SHEET_RECURRING).deleteRow(r);
+  if (r < 0) return id;
+  var rule = getRecurring().filter(function (x) { return x.id === String(id); })[0];
+  if (rule) keepDeleted('recurring', rule, batch);
+  sheet(SHEET_RECURRING).deleteRow(r);
   return id;
 }
 
@@ -844,7 +852,7 @@ function rowToExpense(row) {
   var o = {};
   HEADERS[SHEET_EXPENSES].forEach(function (h, i) { o[h] = row[i]; });
   return {
-    id: o.id, date: o.date, city: o.city, description: o.description,
+    id: String(o.id), date: o.date instanceof Date ? ymd(o.date) : String(o.date), city: o.city, description: o.description,
     paid_by: o.paid_by, currency: o.currency,
     amount_local: Number(o.amount_local), amount_aud: Number(o.amount_aud),
     split_type: o.split_type,
@@ -868,7 +876,7 @@ function addExpense(p) {
   var n = HEADERS[SHEET_EXPENSES].length;
   // Who added it and who last changed it come from the link used, never from the phone.
   var old = r > 0 ? sheet(SHEET_EXPENSES).getRange(r, 1, 1, n).getValues()[0] : null;
-  var created = old && old[row.length] ? old[row.length] : ACTOR;
+  var created = old && old[row.length] ? old[row.length] : (KEEP_CREATED || ACTOR);
   var full = row.concat([created, ACTOR, stamp(new Date())]);
   if (old && sameRow(old.slice(0, row.length), row)) return rowToExpense(old);       // a retry: nothing changed
   if (r > 0) sheet(SHEET_EXPENSES).getRange(r, 1, 1, n).setValues([full]);
@@ -878,6 +886,7 @@ function addExpense(p) {
 
 /** Who is making this request, for the change log and the added-by columns. */
 var ACTOR = '';
+var KEEP_CREATED = '';      // set while restoring, so "added by" stays with whoever first added it
 function stamp(d) { return Utilities.formatDate(d instanceof Date ? d : new Date(d), tz(), 'yyyy-MM-dd HH:mm'); }
 function sameRow(a, b) {
   for (var i = 0; i < b.length; i++) {
@@ -894,9 +903,10 @@ function updateExpense(p) {
   return addExpense(p);
 }
 
-function deleteExpense(id) {
+function deleteExpense(id, batch) {
   var r = findRowById(SHEET_EXPENSES, id);
   if (r < 0) return id;                    // already gone: the goal is met
+  keepDeleted('expense', rowToExpense(sheet(SHEET_EXPENSES).getRange(r, 1, 1, HEADERS[SHEET_EXPENSES].length).getValues()[0]), batch);
   sheet(SHEET_EXPENSES).deleteRow(r);
   return id;
 }
@@ -924,9 +934,11 @@ function addSettlement(p) {
            date: row[4], note: row[5], project_id: row[6], currency: row[7], amount_local: row[8] };
 }
 
-function deleteSettlement(id) {
+function deleteSettlement(id, batch) {
   var r = findRowById(SHEET_SETTLEMENTS, id);
   if (r < 0) return id;                    // already gone
+  var st = getSettlements().filter(function (x) { return x.id === String(id); })[0];
+  if (st) keepDeleted('settlement', st, batch);
   sheet(SHEET_SETTLEMENTS).deleteRow(r);
   return id;
 }
@@ -946,6 +958,7 @@ var CHANGE_TYPES = {
   addSettlement: 'settlement', deleteSettlement: 'settlement',
   addProject: 'project', updateProject: 'project', deleteProject: 'project',
   addRecurring: 'recurring', updateRecurring: 'recurring', deleteRecurring: 'recurring',
+  restoreDeleted: 'restore',
   setPeople: 'people', setPersonCurrency: 'person', setRate: 'rate', clearOverride: 'rate',
   addCurrency: 'rate', removeCurrency: 'rate', createInvite: 'invite', revokeInvite: 'invite'
 };
@@ -956,12 +969,15 @@ function changeKey(action, p) {
   if (t === 'person') return String(p.name || '');
   if (t === 'rate') return String(p.currency || '').toUpperCase();
   if (t === 'invite') return String(p.token || '');
+  if (t === 'restore') return String(p.type || '') + ':' + String(p.id || '');
   return String(p.id || '');
 }
 
 /** The item as it stands, before or after a change. */
 function changeSnapshot(action, p) {
   var t = CHANGE_TYPES[action], k = changeKey(action, p), row;
+  if (t === 'restore') return changeSnapshot({ expense: 'addExpense', settlement: 'addSettlement', project: 'addProject',
+                                               recurring: 'addRecurring' }[p.type] || '', { id: p.id });
   if (t === 'expense') { row = rowById(SHEET_EXPENSES, k); return row ? rowToExpense(row) : null; }
   if (t === 'settlement') return getSettlements().filter(function (s) { return s.id === k; })[0] || null;
   if (t === 'project') return getProjects().filter(function (x) { return x.id === k; })[0] || null;
@@ -986,8 +1002,9 @@ function changeView(o) {
 
 function money(n) { return (Number(n) || 0).toFixed(2); }
 
-function changeSummary(t, action, b, a) {
+function changeSummary(t, action, b, a, p) {
   var o = a || b || {};
+  if (t === 'restore') return 'Restored ' + deletedSummary(p.type, o).replace(/^./, function (c) { return c.toLowerCase(); });
   if (t === 'expense') {
     var what = '"' + (o.description || 'Expense') + '" ' + o.currency + ' ' + money(o.amount_local) +
                (o.currency !== 'AUD' ? ' (A$' + money(o.amount_aud) + ')' : '') + ', paid by ' + o.paid_by;
@@ -1038,8 +1055,76 @@ function logChange(action, p, before) {
     var b = changeView(before), a = changeView(after);
     if (JSON.stringify(b) === JSON.stringify(a)) return;          // a retry, or a no-op
     sheet(SHEET_CHANGES).appendRow([stamp(new Date()), ACTOR, action, t, changeKey(action, p).slice(0, 40),
-      changeSummary(t, action, b, a), b ? JSON.stringify(b) : '', a ? JSON.stringify(a) : '']);
+      changeSummary(t, action, b, a, p), b ? JSON.stringify(b) : '', a ? JSON.stringify(a) : '']);
   } catch (err) { Logger.log('Change log failed: ' + err); }    // never fail a save over the log
+}
+
+/* ------------------------------------------------------------------ *
+ * Deleted items
+ *
+ * Nothing is lost on delete: the whole item goes to the Deleted tab first,
+ * with who and when. Deleting a project takes its expenses, settlements and
+ * recurring rules as one batch, and restoring the project brings the batch
+ * back. Restored rows stay in the tab, stamped with who restored them.
+ * ------------------------------------------------------------------ */
+
+function deletedSummary(type, o) {
+  o = o || {};
+  if (type === 'expense') return 'Expense "' + (o.description || 'Expense') + '" ' + o.currency + ' ' + money(o.amount_local) +
+                                 ', paid by ' + o.paid_by + ', ' + o.date;
+  if (type === 'settlement') return 'Settlement ' + o.from + ' → ' + o.to + ' ' + (o.currency || 'AUD') + ' ' +
+                                    money(o.amount_local || o.amount_aud) + ', ' + o.date;
+  if (type === 'project') return 'Project "' + o.name + '"';
+  if (type === 'recurring') return 'Recurring ' + (o.kind || 'item') + ' "' + ((o.template || {}).description || (o.template || {}).note || o.id) + '"';
+  return type + ' ' + (o.id || '');
+}
+
+function keepDeleted(type, item, batch) {
+  sheet(SHEET_DELETED).appendRow([stamp(new Date()), ACTOR, type, String(item.id),
+    String(type === 'project' ? item.id : item.project_id || ''), deletedSummary(type, item), JSON.stringify(item),
+    batch || '', '', '']);
+}
+
+function deletedRows() {
+  var sh = sheet(SHEET_DELETED), last = sh.getLastRow();
+  if (last < 2) return [];
+  return sh.getRange(2, 1, last - 1, HEADERS[SHEET_DELETED].length).getValues().map(function (r, i) {
+    return { row: i + 2, deleted_at: r[0] instanceof Date ? stamp(r[0]) : String(r[0]), deleted_by: String(r[1]),
+             type: String(r[2]), id: String(r[3]), project_id: String(r[4]), summary: String(r[5]),
+             item: parseJson(r[6], null), batch: String(r[7] || ''), restored: !!String(r[8] || '') };
+  });
+}
+
+/** Not yet restored, newest first, for the app. */
+function recentlyDeleted(n) {
+  return deletedRows().filter(function (d) { return !d.restored && d.item; }).reverse().slice(0, n)
+    .map(function (d) { delete d.row; delete d.restored; return d; });
+}
+
+function restoreDeleted(type, id) {
+  var rows = deletedRows().filter(function (d) { return d.type === String(type) && d.id === String(id) && !d.restored && d.item; });
+  var d = rows[rows.length - 1];
+  if (!d) {
+    var live = type === 'expense' ? rowById(SHEET_EXPENSES, id) : type === 'settlement' ? rowById(SHEET_SETTLEMENTS, id)
+             : type === 'project' ? rowById(SHEET_PROJECTS, id) : null;
+    if (live) return { type: type, id: id };               // already back: a retry
+    throw new Error('Nothing deleted with that id to restore.');
+  }
+  var list = [d];
+  if (type === 'project' && d.batch) {
+    list = list.concat(deletedRows().filter(function (x) { return x.batch === d.batch && !x.restored && x.type !== 'project'; }));
+  } else if (d.project_id && !rowById(SHEET_PROJECTS, d.project_id)) {
+    throw new Error('Its project was deleted — restore the project first.');
+  }
+  var done = stamp(new Date());
+  list.forEach(function (x) {
+    if (x.type === 'project') updateProject(x.item);
+    else if (x.type === 'expense') { KEEP_CREATED = x.item.created_by || ''; try { addExpense(x.item); } finally { KEEP_CREATED = ''; } }
+    else if (x.type === 'settlement') addSettlement(x.item);
+    else if (x.type === 'recurring') saveRecurring(x.item, false);
+    sheet(SHEET_DELETED).getRange(x.row, 9, 1, 2).setValues([[done, ACTOR]]);
+  });
+  return { type: type, id: id, count: list.length };
 }
 
 /** The newest changes, for the app's Settings screen. */
@@ -1440,7 +1525,7 @@ function guestAction(who, action, p, req) {
     case 'deleteExpense':
       var gone = rowById(SHEET_EXPENSES, p.id);
       if (gone) guestCheckExpense(who, projects, rowToExpense(gone));
-      return { id: deleteExpense(p.id) };
+      return { id: deleteExpense(p.id) };                   // kept in Deleted like anyone's
     case 'addSettlement':
       guestCheckSettlement(who, projects, p);
       var oldS = rowById(SHEET_SETTLEMENTS, p.id);
