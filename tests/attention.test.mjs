@@ -8,7 +8,7 @@ const { needsAttention } = new Function(src + '; return { needsAttention };')();
 
 const E = (id, extra) => Object.assign({ id, date: '2026-10-17', description: 'Dim sum', paid_by: 'Sam', currency: 'HKD', amount_local: 600,
   amount_aud: 120, split_type: 'equal', split_detail: { participants: ['Alex', 'Sam'] }, category: 'food' }, extra);
-const base = { expenses: [], settlements: [], people: ['Alex', 'Sam', 'Jo'], me: 'Alex', queueErrors: 0, importLeft: 0,
+const base = { expenses: [], settlements: [], people: ['Alex', 'Sam', 'Jo'], me: 'Alex', ownLink: true, queueErrors: 0, importLeft: 0,
   today: '2026-11-09', dismissed: {}, catOf: c => ['food', 'stay', 'other'].includes(c) ? {} : null };
 const run = over => needsAttention(Object.assign({}, base, over));
 const kinds = list => list.map(i => i.kind);
@@ -31,6 +31,14 @@ t('payments: to confirm, disputed, and long-waiting ones', () => {
   assert.deepEqual(kinds(list), ['confirm', 'disputed', 'stale']);
   assert.equal(list[0].title, "Confirm Sam's payment of A$40.00");
   assert.equal(list[1].detail, '“Nothing yet”');
+});
+
+t('on the shared main link, payments to confirm point to making your own link instead', () => {
+  const list = run({ ownLink: false, settlements: [
+    { id: 's1', from: 'Sam', to: 'Alex', amount_aud: 40, date: '2026-11-08', status: 'pending' },
+    { id: 's2', from: 'Jo', to: 'Alex', amount_aud: 15, date: '2026-11-08', status: 'pending' }] });
+  assert.deepEqual(kinds(list), ['needlink']);
+  assert.equal(list[0].title, '2 payments to you waiting to be confirmed');
 });
 
 t('likely duplicates: same payer, amount and currency within a day', () => {
