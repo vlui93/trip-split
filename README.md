@@ -277,6 +277,22 @@ already landed is not recorded, so the log isn't cluttered with retries. Invite
 links appear only as their first six characters. Full-access phones show the
 newest 40 entries under **Settings → Recent changes**.
 
+### Deleted items
+
+Nothing is lost on delete. Deleting an expense, a settlement or a project first
+copies the whole item to the Sheet's **Deleted** tab, with who deleted it and when.
+Deleting a project takes its expenses, settlements and recurring rules with it as
+one batch, and restoring the project brings the batch back.
+
+- **Undo:** right after deleting an expense or undoing a settlement, the
+  message at the bottom of the screen has **Undo** for a few seconds.
+- **Settings → Recently deleted** on a full-access phone lists everything
+  deleted and not yet restored, each with **Restore**.
+- A restored expense keeps "added by" as whoever first added it. The row stays
+  in the Deleted tab, stamped with who restored it and when, and the restore is
+  recorded in the change log.
+- Guests' deletes are kept too, but only full-access phones can see or restore them.
+
 ### Settle up
 
 The app works out the fewest transfers that clear every balance by matching
@@ -431,6 +447,7 @@ shows a warning first.
 | `Recurring` | id, project_id, kind, frequency, start_date, end_date, generated_through, paused, template_json |
 | `Access` | token, person, project_ids, created, revoked, role (`guest` or `member`; one row per link) |
 | `Changes` | when, who, action, type, id, summary, before_json, after_json (append-only) |
+| `Deleted` | deleted_at, deleted_by, type, id, project_id, summary, item_json, batch, restored_at, restored_by |
 | `Report` | generated: one row per expense with each person's share (rebuilt, don't edit) |
 | `Summary` | generated: totals as formulas over Report, driven by a project and date picker |
 
@@ -487,6 +504,6 @@ no rows.
 |---|---|
 | `index.html` | The whole frontend: markup, styles and logic |
 | `Code.gs` | Apps Script backend |
-| `tests/` | `node tests/<name>.test.mjs`: receipt parsing, the currency ledger, categories and the breakdown, the Excel export, the Report tab, statement import, invite access control, and the change log (runs `Code.gs` against a fake Sheet in `fake-gas.mjs`) |
+| `tests/` | `node tests/<name>.test.mjs`: receipt parsing, the currency ledger, categories and the breakdown, the Excel export, the Report tab, statement import, invite access control, the change log, and deleted items (runs `Code.gs` against a fake Sheet in `fake-gas.mjs`) |
 | `manifest.webmanifest` | Web app manifest |
 | `icon-*-v2.png`, `mkicon.py`, `icon.svg` | Home-screen icons and the script that generates them |
