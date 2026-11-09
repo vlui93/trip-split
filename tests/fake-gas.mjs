@@ -60,7 +60,10 @@ export function loadBackend(){
     LockService: { getScriptLock: () => ({ waitLock() {}, releaseLock() {} }) },
     ContentService: { MimeType: { JSON: 'json' }, createTextOutput: s => ({ s, setMimeType() { return this; } }) },
     Utilities: {
-      formatDate: (d, tz, f) => { const x = new Date(d); const iso = x.toISOString(); return f === 'yyyy-MM-dd' ? iso.slice(0, 10) : iso.slice(0, 19); },
+      // UTC, and just the tokens Code.gs uses.
+      formatDate: (d, tz, f) => { const iso = new Date(d).toISOString();
+        return f.replace("'T'", 'T').replace('yyyy', iso.slice(0, 4)).replace('MM', iso.slice(5, 7)).replace('dd', iso.slice(8, 10))
+                .replace('HH', iso.slice(11, 13)).replace('mm', iso.slice(14, 16)).replace('ss', iso.slice(17, 19)); },
       getUuid: () => crypto.randomUUID(), sleep: () => {},
     },
     Logger: { log: () => {} },

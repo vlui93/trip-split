@@ -19,6 +19,7 @@ var SHEET_SETTLEMENTS = 'Settlements';
 var SHEET_PROJECTS    = 'Projects';
 var SHEET_RECURRING   = 'Recurring';
 var SHEET_ACCESS      = 'Access';
+var SHEET_CHANGES     = 'Changes';
 
 // Quick categories for the spending breakdown. Blank means not chosen yet.
 var CATEGORIES = ['food', 'transport', 'stay', 'activities', 'shopping', 'groceries', 'bills', 'other'];
@@ -30,7 +31,7 @@ var DEFAULT_CURRENCIES = ['AUD'];
 
 // Bump when the app starts relying on something new here. The app compares it and
 // says "redeploy" in plain words instead of failing on an unknown action.
-var API_VERSION = 6;
+var API_VERSION = 7;
 
 /** Every currency the sheet knows about. AUD is always first and always present. */
 function CURRENCIES() {
@@ -47,16 +48,20 @@ HEADERS[SHEET_PEOPLE]      = ['name', 'currency'];
 // project_id and category are appended, not inserted, so an existing sheet keeps its data.
 HEADERS[SHEET_EXPENSES]    = ['id', 'date', 'city', 'description', 'paid_by', 'currency',
                               'amount_local', 'amount_aud', 'split_type',
-                              'split_detail_json', 'item_breakdown_json', 'project_id', 'category'];
+                              'split_detail_json', 'item_breakdown_json', 'project_id', 'category',
+                              'created_by', 'updated_by', 'updated_at'];
 HEADERS[SHEET_RATES]       = ['currency', 'rate_to_aud', 'last_updated', 'is_manual_override'];
 HEADERS[SHEET_SETTLEMENTS] = ['id', 'from', 'to', 'amount_aud', 'date', 'note', 'project_id',
-                              'currency', 'amount_local'];
+                              'currency', 'amount_local', 'created_by', 'created_at'];
 HEADERS[SHEET_RECURRING]   = ['id', 'project_id', 'kind', 'frequency', 'start_date', 'end_date',
                               'generated_through', 'paused', 'template_json'];
 HEADERS[SHEET_PROJECTS]    = ['id', 'name', 'start_date', 'end_date',
                               'currencies', 'cities', 'members', 'archived'];
 // One row per invite link. The token is the link's password; revoked turns it off.
-HEADERS[SHEET_ACCESS]      = ['token', 'person', 'project_ids', 'created', 'revoked'];
+// role: "guest" (only their own expenses in their projects) or "member" (everything, as themselves).
+HEADERS[SHEET_ACCESS]      = ['token', 'person', 'project_ids', 'created', 'revoked', 'role'];
+// One row per change, never edited: who, when, what, and the before and after.
+HEADERS[SHEET_CHANGES]     = ['when', 'who', 'action', 'type', 'id', 'summary', 'before_json', 'after_json'];
 
 /* ------------------------------------------------------------------ *
  * One-time setup
@@ -228,6 +233,7 @@ function handle(e, req) {
 
   var action  = String(req.action || 'bootstrap');
   var payload = req.payload || {};
+  ACTOR = who.owner ? (who.person || 'Main link') : who.person + ' (guest)';
 
   // The Claude calls take tens of seconds and touch no rows, so they must not
   // hold the script lock — that would block every other write for the duration.
@@ -254,9 +260,11 @@ function handle(e, req) {
   }
   try {
     var out;
+    var before = CHANGE_TYPES[action] ? changeSnapshot(action, payload) : undefined;
 
     if (!who.owner) {
       out = guestAction(who, action, payload, req);
+      logChange(action, payload, before);
       afterRequest(action);
       out.ok = true;
       return json(out);
@@ -286,6 +294,11 @@ function handle(e, req) {
       case 'deleteSettlement': out = { id: deleteSettlement(payload.id) }; break;
       default: return json({ ok: false, error: 'Unknown action: ' + action });
     }
+    if (action === 'bootstrap') {
+      out.whoami = { person: who.person || '', role: who.member ? 'member' : 'main' };
+      out.changes = recentChanges(40);
+    }
+    logChange(action, payload, before);
     afterRequest(action);
     out.ok = true;
     return json(out);
@@ -428,7 +441,10 @@ function getExpenses() {
       split_detail: parseJson(r.split_detail_json, {}),
       items:        parseJson(r.item_breakdown_json, null),
       project_id:   String(r.project_id || ''),
-      category:     category(r.category)
+      category:     category(r.category),
+      created_by:   String(r.created_by || ''),
+      updated_by:   String(r.updated_by || ''),
+      updated_at:   r.updated_at instanceof Date ? stamp(r.updated_at) : String(r.updated_at || '')
     };
   });
 }
@@ -446,7 +462,9 @@ function getSettlements() {
       // Rows from before per-person currencies are AUD.
       currency:     String(r.currency || 'AUD'),
       amount_local: r.amount_local === '' || r.amount_local == null
-                      ? (Number(r.amount_aud) || 0) : (Number(r.amount_local) || 0)
+                      ? (Number(r.amount_aud) || 0) : (Number(r.amount_local) || 0),
+      created_by:   String(r.created_by || ''),
+      created_at:   r.created_at instanceof Date ? stamp(r.created_at) : String(r.created_at || '')
     };
   });
 }
@@ -693,7 +711,12 @@ function dueDates(rule, after, until, cap) {
 function materializeRecurring(rateList) {
   var rules = getRecurring();
   if (!rules.length) return 0;
+  var actor = ACTOR;
+  ACTOR = 'Recurring';
+  try { return makeOccurrences(rules, rateList); } finally { ACTOR = actor; }
+}
 
+function makeOccurrences(rules, rateList) {
   var rate = {};
   (rateList || []).forEach(function (r) { rate[r.currency] = Number(r.rate_to_aud) || 0; });
   rate.AUD = 1;
@@ -828,7 +851,9 @@ function rowToExpense(row) {
     split_detail: parseJson(o.split_detail_json, {}),
     items: parseJson(o.item_breakdown_json, null),
     project_id: String(o.project_id || ''),
-    category: category(o.category)
+    category: category(o.category),
+    created_by: String(o.created_by || ''), updated_by: String(o.updated_by || ''),
+    updated_at: o.updated_at instanceof Date ? stamp(o.updated_at) : String(o.updated_at || '')
   };
 }
 
@@ -840,9 +865,26 @@ function rowToExpense(row) {
 function addExpense(p) {
   var row = expenseRow(p);
   var r = findRowById(SHEET_EXPENSES, row[0]);
-  if (r > 0) sheet(SHEET_EXPENSES).getRange(r, 1, 1, row.length).setValues([row]);
-  else sheet(SHEET_EXPENSES).appendRow(row);
-  return rowToExpense(row);
+  var n = HEADERS[SHEET_EXPENSES].length;
+  // Who added it and who last changed it come from the link used, never from the phone.
+  var old = r > 0 ? sheet(SHEET_EXPENSES).getRange(r, 1, 1, n).getValues()[0] : null;
+  var created = old && old[row.length] ? old[row.length] : ACTOR;
+  var full = row.concat([created, ACTOR, stamp(new Date())]);
+  if (old && sameRow(old.slice(0, row.length), row)) return rowToExpense(old);       // a retry: nothing changed
+  if (r > 0) sheet(SHEET_EXPENSES).getRange(r, 1, 1, n).setValues([full]);
+  else sheet(SHEET_EXPENSES).appendRow(full);
+  return rowToExpense(full);
+}
+
+/** Who is making this request, for the change log and the added-by columns. */
+var ACTOR = '';
+function stamp(d) { return Utilities.formatDate(d instanceof Date ? d : new Date(d), tz(), 'yyyy-MM-dd HH:mm'); }
+function sameRow(a, b) {
+  for (var i = 0; i < b.length; i++) {
+    var x = a[i] instanceof Date ? ymd(a[i]) : a[i];
+    if (String(x) !== String(b[i]) && Number(x) !== Number(b[i])) return false;
+  }
+  return true;
 }
 
 function updateExpense(p) {
@@ -877,7 +919,7 @@ function addSettlement(p) {
   ];
   var r = findRowById(SHEET_SETTLEMENTS, row[0]);          // upsert, as with expenses
   if (r > 0) sheet(SHEET_SETTLEMENTS).getRange(r, 1, 1, row.length).setValues([row]);
-  else sheet(SHEET_SETTLEMENTS).appendRow(row);
+  else sheet(SHEET_SETTLEMENTS).appendRow(row.concat([ACTOR, stamp(new Date())]));
   return { id: row[0], from: row[1], to: row[2], amount_aud: row[3],
            date: row[4], note: row[5], project_id: row[6], currency: row[7], amount_local: row[8] };
 }
@@ -887,6 +929,128 @@ function deleteSettlement(id) {
   if (r < 0) return id;                    // already gone
   sheet(SHEET_SETTLEMENTS).deleteRow(r);
   return id;
+}
+
+/* ------------------------------------------------------------------ *
+ * Change log
+ *
+ * Every write is recorded in the Changes tab: when, who (the person whose
+ * link was used), what, a one-line summary, and the item before and after as
+ * JSON — so a deleted expense can always be found again. A retry that
+ * changes nothing (the phone re-sending something that already landed) is
+ * not recorded. Rows are only ever appended.
+ * ------------------------------------------------------------------ */
+
+var CHANGE_TYPES = {
+  addExpense: 'expense', updateExpense: 'expense', deleteExpense: 'expense',
+  addSettlement: 'settlement', deleteSettlement: 'settlement',
+  addProject: 'project', updateProject: 'project', deleteProject: 'project',
+  addRecurring: 'recurring', updateRecurring: 'recurring', deleteRecurring: 'recurring',
+  setPeople: 'people', setPersonCurrency: 'person', setRate: 'rate', clearOverride: 'rate',
+  addCurrency: 'rate', removeCurrency: 'rate', createInvite: 'invite', revokeInvite: 'invite'
+};
+
+function changeKey(action, p) {
+  var t = CHANGE_TYPES[action];
+  if (t === 'people') return 'people';
+  if (t === 'person') return String(p.name || '');
+  if (t === 'rate') return String(p.currency || '').toUpperCase();
+  if (t === 'invite') return String(p.token || '');
+  return String(p.id || '');
+}
+
+/** The item as it stands, before or after a change. */
+function changeSnapshot(action, p) {
+  var t = CHANGE_TYPES[action], k = changeKey(action, p), row;
+  if (t === 'expense') { row = rowById(SHEET_EXPENSES, k); return row ? rowToExpense(row) : null; }
+  if (t === 'settlement') return getSettlements().filter(function (s) { return s.id === k; })[0] || null;
+  if (t === 'project') return getProjects().filter(function (x) { return x.id === k; })[0] || null;
+  if (t === 'recurring') return getRecurring().filter(function (x) { return x.id === k; })[0] || null;
+  if (t === 'people') return { people: getPeople() };
+  if (t === 'person') return { name: k, currency: personCurrencies()[k] || 'AUD' };
+  if (t === 'rate') return readRates()[k] || null;
+  if (t === 'invite') {
+    var inv = getInvites().filter(function (i) { return i.token === k; })[0];
+    return inv ? Object.assign({}, inv, { token: inv.token.slice(0, 6) + '…' }) : null;   // the link itself stays out of the log
+  }
+  return null;
+}
+
+/** Leave out what changes on every save and means nothing to a reader. */
+function changeView(o) {
+  if (!o) return o;
+  var c = JSON.parse(JSON.stringify(o));
+  ['updated_by', 'updated_at', 'last_updated'].forEach(function (k) { delete c[k]; });
+  return c;
+}
+
+function money(n) { return (Number(n) || 0).toFixed(2); }
+
+function changeSummary(t, action, b, a) {
+  var o = a || b || {};
+  if (t === 'expense') {
+    var what = '"' + (o.description || 'Expense') + '" ' + o.currency + ' ' + money(o.amount_local) +
+               (o.currency !== 'AUD' ? ' (A$' + money(o.amount_aud) + ')' : '') + ', paid by ' + o.paid_by;
+    if (!b) return 'Added ' + what;
+    if (!a) return 'Deleted ' + what;
+    return 'Changed "' + (o.description || 'Expense') + '": ' + fieldDiff(b, a);
+  }
+  if (t === 'settlement') {
+    var s = o.from + ' → ' + o.to + ' ' + (o.currency || 'AUD') + ' ' + money(o.amount_local || o.amount_aud);
+    return (!b ? 'Logged settlement ' : !a ? 'Removed settlement ' : 'Changed settlement ') + s;
+  }
+  if (t === 'project') return (!b ? 'Added project "' : !a ? 'Deleted project "' : 'Changed project "') + o.name + '"' + (b && a ? ': ' + fieldDiff(b, a) : '');
+  if (t === 'recurring') return (!b ? 'Set up' : !a ? 'Removed' : 'Changed') + ' a recurring ' + (o.kind || 'item') + (b && a ? ': ' + fieldDiff(b, a) : '');
+  if (t === 'people') {
+    var was = (b && b.people) || [], now = (a && a.people) || [];
+    var add = now.filter(function (n) { return was.indexOf(n) < 0; }), gone = was.filter(function (n) { return now.indexOf(n) < 0; });
+    return 'People: ' + [add.length ? 'added ' + add.join(', ') : '', gone.length ? 'removed ' + gone.join(', ') : ''].filter(String).join('; ');
+  }
+  if (t === 'person') return o.name + ' now settles in ' + o.currency;
+  if (t === 'rate') return (!a ? 'Removed currency ' + (b && b.currency) : !b ? 'Added currency ' + a.currency
+                            : 'Rate for ' + a.currency + ': ' + (b.rate_to_aud ? (1 / b.rate_to_aud).toFixed(4) : '—') + ' → ' + (a.rate_to_aud ? (1 / a.rate_to_aud).toFixed(4) : '—') + ' per AUD' + (a.is_manual_override ? ' (manual)' : ''));
+  if (t === 'invite') return (action === 'revokeInvite' ? 'Turned off the link for ' : 'Made a ' + (o.role === 'member' ? 'full-access' : 'guest') + ' link for ') + o.person;
+  return action;
+}
+
+/** "amount_aud 91.20 → 94.58; category activities → food" */
+function fieldDiff(b, a) {
+  var out = [];
+  Object.keys(Object.assign({}, b, a)).forEach(function (k) {
+    if (['created_by', 'updated_by', 'updated_at'].indexOf(k) >= 0) return;
+    var x = JSON.stringify(b[k] === undefined ? null : b[k]), y = JSON.stringify(a[k] === undefined ? null : a[k]);
+    if (x === y) return;
+    var show = function (v) {
+      v = v === undefined || v === null ? '' : Array.isArray(v) ? v.join(', ') : typeof v === 'object' ? JSON.stringify(v) : String(v);
+      v = v === '' ? '(none)' : v;
+      return v.length > 40 ? v.slice(0, 37) + '…' : v;
+    };
+    out.push(k + ' ' + show(b[k]) + ' → ' + show(a[k]));
+  });
+  return out.join('; ') || 'no visible change';
+}
+
+function logChange(action, p, before) {
+  var t = CHANGE_TYPES[action];
+  if (!t) return;
+  try {
+    var after = changeSnapshot(action, p);
+    var b = changeView(before), a = changeView(after);
+    if (JSON.stringify(b) === JSON.stringify(a)) return;          // a retry, or a no-op
+    sheet(SHEET_CHANGES).appendRow([stamp(new Date()), ACTOR, action, t, changeKey(action, p).slice(0, 40),
+      changeSummary(t, action, b, a), b ? JSON.stringify(b) : '', a ? JSON.stringify(a) : '']);
+  } catch (err) { Logger.log('Change log failed: ' + err); }    // never fail a save over the log
+}
+
+/** The newest changes, for the app's Settings screen. */
+function recentChanges(n) {
+  var sh = sheet(SHEET_CHANGES), last = sh.getLastRow();
+  if (last < 2) return [];
+  var from = Math.max(2, last - n + 1);
+  return sh.getRange(from, 1, last - from + 1, 6).getValues().reverse().map(function (r) {
+    return { when: r[0] instanceof Date ? stamp(r[0]) : String(r[0]), who: String(r[1]), type: String(r[3]),
+             id: String(r[4]), summary: String(r[5]) };
+  });
 }
 
 /* ------------------------------------------------------------------ *
@@ -1020,7 +1184,7 @@ function rebuildReport() {
 
   var head = ['Date', 'Month', 'Project', 'Place', 'Category', 'Description', 'Paid by', 'Split', 'Currency',
               'Amount', 'Rate (per 1 AUD)', 'Amount (AUD)']
-    .concat(people.map(function (p) { return 'Share: ' + p; }), ['Shares total', 'ID']);
+    .concat(people.map(function (p) { return 'Share: ' + p; }), ['Shares total', 'ID', 'Added by', 'Changed by', 'Changed at']);
   var rows = expenses.map(function (ex, i) {
     var rate = ex.currency === 'AUD' ? 1 : (ex.amount_aud > 0 ? ex.amount_local / ex.amount_aud : 0);
     var sh = shares[i], tot = 0;
@@ -1028,7 +1192,7 @@ function rebuildReport() {
     return [ex.date, String(ex.date).slice(0, 7), (byId[ex.project_id] || {}).name || '', ex.city,
             CAT_LABELS[ex.category] || 'Not set', ex.description, ex.paid_by, SPLIT_LABELS[ex.split_type] || ex.split_type,
             ex.currency, ex.amount_local, Math.round(rate * 1e4) / 1e4, ex.amount_aud]
-      .concat(per, [tot / 100, ex.id]);
+      .concat(per, [tot / 100, ex.id, ex.created_by, ex.updated_by, ex.updated_at]);
   });
 
   var sh = freshTab(SHEET_REPORT);
@@ -1147,6 +1311,7 @@ function principal(token, ownerToken) {
   var row = readRows(SHEET_ACCESS).filter(function (r) { return String(r.token) === token; })[0];
   if (!row) return null;
   if (isTrue(row.revoked)) return { revoked: true };
+  if (String(row.role) === 'member') return { owner: true, member: true, person: String(row.person) };
   return { owner: false, person: String(row.person), projects: csv(row.project_ids) };
 }
 
@@ -1157,7 +1322,8 @@ function getInvites() {
       person:      String(r.person),
       project_ids: csv(r.project_ids),
       created:     r.created instanceof Date ? ymd(r.created) : String(r.created || ''),
-      revoked:     isTrue(r.revoked)
+      revoked:     isTrue(r.revoked),
+      role:        String(r.role) === 'member' ? 'member' : 'guest'
     };
   }).filter(function (i) { return i.token; });
 }
@@ -1168,9 +1334,10 @@ function createInvite(p) {
   if (!/^[a-f0-9]{32}$/.test(token)) throw new Error('Bad invite token.');
   var person = String(p.person || '').trim();
   if (getPeople().indexOf(person) < 0) throw new Error(person + ' is not in the People list.');
+  var role = p.role === 'member' ? 'member' : 'guest';
   var ids = (p.project_ids || []).map(String).filter(function (x) { return x; });
-  if (!ids.length) throw new Error('Pick at least one project.');
-  var row = [token, person, ids.join(','), String(p.created || ymd(new Date())), false];
+  if (!ids.length && role === 'guest') throw new Error('Pick at least one project.');
+  var row = [token, person, ids.join(','), String(p.created || ymd(new Date())), false, role];
   var r = findRowById(SHEET_ACCESS, token);
   if (r > 0) sheet(SHEET_ACCESS).getRange(r, 1, 1, row.length).setValues([row]);
   else sheet(SHEET_ACCESS).appendRow(row);
@@ -1222,6 +1389,7 @@ function guestBootstrap(who, projects) {
   return {
     apiVersion:  API_VERSION,
     guest:       { person: who.person, project_ids: Object.keys(projects) },
+    whoami:      { person: who.person, role: 'guest' },
     recurring:   [],
     projects:    getProjects().filter(function (p) { return projects[p.id]; }),
     people:      people,
