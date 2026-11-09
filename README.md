@@ -277,6 +277,23 @@ already landed is not recorded, so the log isn't cluttered with retries. Invite
 links appear only as their first six characters. Full-access phones show the
 newest 40 entries under **Settings → Recent changes**.
 
+### Needs attention
+
+When something wants a look, a **Needs attention** card sits at the top of Home,
+with each item's fix one tap away:
+
+- Payments to you waiting for your confirmation, and payments of yours marked
+  not received.
+- Changes that couldn't sync, and statement lines left to review.
+- Possible duplicates: same payer, amount and currency, within a day.
+- Foreign-currency expenses with no exchange rate, and expenses split with
+  someone no longer in the project.
+- Payments of yours still unconfirmed after a week, and expenses with no category.
+
+It's worked out on the phone for the current project. Duplicates, missing
+categories and old waiting payments can be dismissed (×), which hides them on
+that phone only.
+
 ### Confirming settlements
 
 A payment logged by anyone other than the person being paid shows **Waiting for
@@ -520,6 +537,6 @@ no rows.
 |---|---|
 | `index.html` | The whole frontend: markup, styles and logic |
 | `Code.gs` | Apps Script backend |
-| `tests/` | `node tests/<name>.test.mjs`: receipt parsing, the currency ledger, categories and the breakdown, the Excel export, the Report tab, statement import, invite access control, the change log, deleted items, and settlement confirmation (runs `Code.gs` against a fake Sheet in `fake-gas.mjs`) |
+| `tests/` | `node tests/<name>.test.mjs`: receipt parsing, the currency ledger, categories and the breakdown, the Excel export, the Report tab, statement import, invite access control, the change log, deleted items, settlement confirmation, and the needs-attention list (runs `Code.gs` against a fake Sheet in `fake-gas.mjs`) |
 | `manifest.webmanifest` | Web app manifest |
 | `icon-*-v2.png`, `mkicon.py`, `icon.svg` | Home-screen icons and the script that generates them |
