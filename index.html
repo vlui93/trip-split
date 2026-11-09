@@ -292,6 +292,7 @@ body.guest .owner-only{display:none !important}
   </div>
 
   <div id="syncBanner"></div>
+  <div id="confirmBanner"></div>
 
   <div class="card">
     <div class="row between" style="margin-bottom:4px">
@@ -1121,7 +1122,9 @@ function buildLedger(expenses, settlements, members, curOf, rateNow, shares){
 
 function settleCur(name){ return (S.personCur || {})[name] || BASE; }
 function ledger(){
-  return buildLedger(pExpenses(), pSettlements(), pPeople(), settleCur, rateOf, sharesOf);
+  // A disputed payment doesn't count until it's confirmed after all. One awaiting
+  // confirmation does, so nobody is asked to pay twice while they wait.
+  return buildLedger(pExpenses(), pSettlements().filter(st => st.status !== 'disputed'), pPeople(), settleCur, rateOf, sharesOf);
 }
 /** Net balance per AUD-pool person in AUD cents. Positive = owed money. */
 function balances(){ return ledger().pool; }
@@ -1201,6 +1204,10 @@ function replayQueue(){
     else if (a === 'addSettlement') upsert(S.settlements, p);
     else if (a === 'deleteSettlement') S.settlements = drop(S.settlements, p.id);
     else if (a === 'restoreDeleted' && p.item) applyRestore(p.type, p.item);
+    else if (a === 'confirmSettlement' || a === 'disputeSettlement'){
+      const st = S.settlements.find(x => String(x.id) === String(p.id));
+      if (st) Object.assign(st, { status: a === 'confirmSettlement' ? 'confirmed' : 'disputed', dispute_note: a === 'confirmSettlement' ? '' : p.note || '' });
+    }
     else if (a === 'addRecurring' || a === 'updateRecurring') upsert(S.recurring, p);
     else if (a === 'deleteRecurring') S.recurring = drop(S.recurring, p.id);
     else if (a === 'addProject' || a === 'updateProject') upsert(S.projects, p);
@@ -1254,7 +1261,7 @@ function enqueue(action, payload){
 function persist(){ save(K_STATE, S); }
 
 // The backend version this app needs. Older backends get a plain "redeploy" message.
-const API_NEEDED = 8;
+const API_NEEDED = 9;
 let BACKEND_OLD = false;
 
 function friendlyError(msg){
@@ -1653,13 +1660,17 @@ function renderSettle(){
   const log = pSettlements().slice().sort(byDateDesc);
   $('#settleLog').innerHTML = log.length ? monthGroups('settle', log, st => `
     <div class="xfer">
-      <div class="ic" style="width:40px;height:40px;border-radius:11px;background:var(--surface-2);display:grid;place-items:center">✓</div>
+      <div class="ic" style="width:40px;height:40px;border-radius:11px;background:var(--surface-2);display:grid;place-items:center">${st.status === 'pending' ? '⏳' : st.status === 'disputed' ? '!' : '✓'}</div>
       <div class="grow">
         <div style="font-weight:620">${esc(st.from)} <span class="arrow">→</span> ${esc(st.to)}</div>
         <div style="font-size:12.5px;color:var(--muted)">${isOccurrence(st.id)?'↻ ':''}${esc(st.date)}${st.note?' · '+esc(st.note):''}</div>
+        ${settleStatus(st)}
+        ${canAnswer(st) ? `<div class="row" style="gap:6px;margin-top:8px">
+          <button class="btn sm primary" data-stok="${esc(st.id)}">Confirm received</button>
+          ${st.status === 'pending' ? `<button class="btn sm ghost" data-stno="${esc(st.id)}">Not received</button>` : ''}</div>` : ''}
       </div>
       <div style="text-align:right">
-        <div class="mono" style="font-weight:700">${st.currency && st.currency !== BASE ? fmtCur(st.amount_local, st.currency) : fmtAud(st.amount_aud)}</div>
+        <div class="mono" style="font-weight:700;${st.status === 'disputed' ? 'text-decoration:line-through;opacity:.6' : ''}">${st.currency && st.currency !== BASE ? fmtCur(st.amount_local, st.currency) : fmtAud(st.amount_aud)}</div>
         <button class="btn sm ghost" style="margin-top:4px" data-unsettle="${esc(st.id)}">Undo</button>
       </div>
     </div>`, g => g.length + ' settled')
@@ -2429,12 +2440,14 @@ function exportWorkbook(d){
   // ---- Settlements
   const st = d.settlements;
   const sLast = st.length + 1;
-  const stRows = [[head('Date'), head('Month'), head('From'), head('To'), head('Currency'), head('Amount'), head('Amount (AUD)'), head('Note'), head('ID')]];
+  const stRows = [[head('Date'), head('Month'), head('From'), head('To'), head('Currency'), head('Amount'), head('Amount (AUD)'), head('Note'), head('ID'), head('Status')]];
+  const stStatus = s => s.status === 'pending' ? 'Waiting for ' + s.to : s.status === 'disputed' ? 'Disputed' + (s.dispute_note ? ': ' + s.dispute_note : '') + ' (not counted)'
+                      : s.status === 'confirmed' ? 'Confirmed by ' + (s.confirmed_by || s.to) : '';
   let stAud = 0;
   st.forEach(s => {
     const aud = Math.round((Number(s.amount_aud) || 0) * 100); stAud += aud;
     stRows.push([{ v: s.date, s: 'date' }, String(s.date || '').slice(0, 7), s.from, s.to, s.currency || 'AUD',
-      { v: Number(s.currency && s.currency !== 'AUD' ? s.amount_local : s.amount_aud) || 0, s: 'money' }, { v: r2(aud), s: 'money' }, s.note || '', s.id]);
+      { v: Number(s.currency && s.currency !== 'AUD' ? s.amount_local : s.amount_aud) || 0, s: 'money' }, { v: r2(aud), s: 'money' }, s.note || '', s.id, stStatus(s)]);
   });
   stRows.push([]);
   stRows.push([{ v: 'Total in AUD (rows shown)', s: 'bold' }, '', '', '', '', '', { v: r2(stAud), s: 'tmoney', f: `SUBTOTAL(109,G2:G${Math.max(sLast, 2)})` }]);
@@ -2497,7 +2510,7 @@ function exportWorkbook(d){
     { name: 'Summary', rows: sm, cols: [30, 16, 18, 16] },
     { name: 'Expenses', rows: exRows, freeze: 1, filter: `A1:${lastCol}${Math.max(last, 2)}`,
       cols: [11, 9, 13, 15, 30, 11, 9, 9, 12, 14, 13].concat(people.map(() => 13), [13, 9, 20, 12, 12, 16]) },
-    { name: 'Settlements', rows: stRows, freeze: 1, filter: `A1:I${Math.max(sLast, 2)}`, cols: [11, 9, 12, 12, 9, 12, 13, 24, 20] },
+    { name: 'Settlements', rows: stRows, freeze: 1, filter: `A1:J${Math.max(sLast, 2)}`, cols: [11, 9, 12, 12, 9, 12, 13, 24, 20, 26] },
     { name: 'Balances', rows: bl, cols: [18, 16, 12, 14] },
   ];
 }
@@ -2686,6 +2699,47 @@ function renderBreakdown(){
     }).join('')}
     ${bd.by === 'category' && guessed ? `<div style="font-size:12.5px;color:var(--muted);margin-top:10px">${guessed} expense${guessed > 1 ? 's have' : ' has'}
       no category yet, so ${guessed > 1 ? 'they’re' : 'it’s'} counted by a guess from the description. Edit ${guessed > 1 ? 'them' : 'it'} to set one.</div>` : ''}`;
+}
+
+/* ---------------- settlement confirmation ----------------
+   A payment logged by anyone but the person paid waits for them to confirm it
+   on their own link. Waiting ones count in balances; disputed ones don't. */
+
+/** The person behind this phone's link: '' on the shared main link. */
+const linkPerson = () => (S.whoami && S.whoami.person) || (S.guest && S.guest.person) || '';
+const canAnswer = st => !!linkPerson() && linkPerson() === st.to && (st.status === 'pending' || st.status === 'disputed');
+
+function settleStatus(st){
+  const line = (txt, color) => `<div style="font-size:12.5px;margin-top:2px;color:${color}">${txt}</div>`;
+  if (st.status === 'pending') return line(`Waiting for ${esc(st.to)} to confirm`, 'var(--warn)');
+  if (st.status === 'disputed') return line(`Disputed by ${esc(st.confirmed_by || st.to)}${st.dispute_note ? ': “' + esc(st.dispute_note) + '”' : ''} · not counted`, 'var(--neg)');
+  if (st.status === 'confirmed') return line(`✓ Confirmed by ${esc(st.confirmed_by || st.to)}`, 'var(--pos)');
+  return '';
+}
+
+function answerSettlement(id, yes){
+  const st = (S.settlements || []).find(x => String(x.id) === String(id));
+  if (!st) return;
+  let note = '';
+  if (!yes){
+    note = prompt(`Say what's wrong, so ${st.from} knows (optional):`, '');
+    if (note === null) return;
+  }
+  Object.assign(st, { status: yes ? 'confirmed' : 'disputed', confirmed_by: linkPerson(), dispute_note: yes ? '' : note });
+  enqueue(yes ? 'confirmSettlement' : 'disputeSettlement', { id: st.id, note });
+  persist(); renderAll(); renderSettle();
+  toast(yes ? 'Confirmed — thanks' : 'Marked as not received');
+}
+
+/** On Home: payments to you that are waiting for your answer, across projects. */
+function renderConfirmBanner(){
+  const box = $('#confirmBanner');
+  if (!box) return;
+  const me = linkPerson();
+  const waiting = me ? (S.settlements || []).filter(st => st.to === me && st.status === 'pending') : [];
+  box.innerHTML = waiting.length ? `<div class="banner warn" style="align-items:center"><span class="dot pend"></span>
+    <div class="grow">${waiting.length} payment${waiting.length > 1 ? 's' : ''} to you to confirm</div>
+    <button class="btn sm ghost" data-go="settle">Review</button></div>` : '';
 }
 
 /* ---------------- months ----------------
@@ -3157,7 +3211,7 @@ function renderMore(){
   renderOcrRow();
 }
 
-function renderAll(){ document.body.classList.toggle('guest', !!GUEST()); renderProjectHeader(); renderHome(); renderRecurCard(); renderSync();
+function renderAll(){ document.body.classList.toggle('guest', !!GUEST()); renderConfirmBanner(); renderProjectHeader(); renderHome(); renderRecurCard(); renderSync();
   if ($('#s-history').classList.contains('on')) renderHistory();
   if ($('#s-settle').classList.contains('on'))  renderSettle();
   if ($('#s-more').classList.contains('on'))    renderMore();
@@ -3723,7 +3777,10 @@ function savePay(){
     from: payTx.from, to: payTx.to,
     currency: cur, amount_local: round2(amt),
     amount_aud: round2(cur === BASE ? amt : amt * rateOf(cur)),
-    date: today(), note: $('#payNote').value.trim()
+    date: today(), note: $('#payNote').value.trim(),
+    // The person paid logging it is them saying they got it; anyone else's waits for them.
+    status: linkPerson() && linkPerson() === payTx.to ? 'confirmed' : 'pending',
+    confirmed_by: linkPerson() === payTx.to ? linkPerson() : ''
   };
   S.settlements.push(st);
   enqueue('addSettlement', st);
@@ -4047,6 +4104,8 @@ document.addEventListener('click', e => {
   if (e.target.id === 'cancelPeople'){ PED = null; renderMore(); toast('Changes discarded'); }
   if (e.target.id === 'invNew') openInvite();
   if (e.target.id === 'chAll'){ CH_ALL = true; renderChanges(); return; }
+  const sa = e.target.closest('[data-stok],[data-stno]');
+  if (sa){ answerSettlement(sa.dataset.stok || sa.dataset.stno, !!sa.dataset.stok); return; }
   const rs = e.target.closest('[data-restore]');
   if (rs){
     const [type, id] = rs.dataset.restore.split('|');
