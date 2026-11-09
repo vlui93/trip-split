@@ -32,7 +32,7 @@ var DEFAULT_CURRENCIES = ['AUD'];
 
 // Bump when the app starts relying on something new here. The app compares it and
 // says "redeploy" in plain words instead of failing on an unknown action.
-var API_VERSION = 8;
+var API_VERSION = 9;
 
 /** Every currency the sheet knows about. AUD is always first and always present. */
 function CURRENCIES() {
@@ -53,7 +53,9 @@ HEADERS[SHEET_EXPENSES]    = ['id', 'date', 'city', 'description', 'paid_by', 'c
                               'created_by', 'updated_by', 'updated_at'];
 HEADERS[SHEET_RATES]       = ['currency', 'rate_to_aud', 'last_updated', 'is_manual_override'];
 HEADERS[SHEET_SETTLEMENTS] = ['id', 'from', 'to', 'amount_aud', 'date', 'note', 'project_id',
-                              'currency', 'amount_local', 'created_by', 'created_at'];
+                              'currency', 'amount_local', 'created_by', 'created_at',
+                              // pending until the person paid confirms on their own link; blank on older rows
+                              'status', 'confirmed_by', 'confirmed_at', 'dispute_note'];
 HEADERS[SHEET_RECURRING]   = ['id', 'project_id', 'kind', 'frequency', 'start_date', 'end_date',
                               'generated_through', 'paused', 'template_json'];
 HEADERS[SHEET_PROJECTS]    = ['id', 'name', 'start_date', 'end_date',
@@ -238,6 +240,7 @@ function handle(e, req) {
   var action  = String(req.action || 'bootstrap');
   var payload = req.payload || {};
   ACTOR = who.owner ? (who.person || 'Main link') : who.person + ' (guest)';
+  ACTOR_PERSON = who.person || '';
 
   // The Claude calls take tens of seconds and touch no rows, so they must not
   // hold the script lock — that would block every other write for the duration.
@@ -297,6 +300,8 @@ function handle(e, req) {
       case 'addSettlement':out = { settlement: addSettlement(payload) }; break;
       case 'deleteSettlement': out = { id: deleteSettlement(payload.id) }; break;
       case 'restoreDeleted': out = { restored: restoreDeleted(payload.type, payload.id) }; break;
+      case 'confirmSettlement': out = { settlement: answerSettlement(payload.id, 'confirmed') }; break;
+      case 'disputeSettlement': out = { settlement: answerSettlement(payload.id, 'disputed', payload.note) }; break;
       default: return json({ ok: false, error: 'Unknown action: ' + action });
     }
     if (action === 'bootstrap') {
@@ -470,7 +475,11 @@ function getSettlements() {
       amount_local: r.amount_local === '' || r.amount_local == null
                       ? (Number(r.amount_aud) || 0) : (Number(r.amount_local) || 0),
       created_by:   String(r.created_by || ''),
-      created_at:   r.created_at instanceof Date ? stamp(r.created_at) : String(r.created_at || '')
+      created_at:   r.created_at instanceof Date ? stamp(r.created_at) : String(r.created_at || ''),
+      status:       String(r.status || ''),
+      confirmed_by: String(r.confirmed_by || ''),
+      confirmed_at: r.confirmed_at instanceof Date ? stamp(r.confirmed_at) : String(r.confirmed_at || ''),
+      dispute_note: String(r.dispute_note || '')
     };
   });
 }
@@ -886,7 +895,8 @@ function addExpense(p) {
 
 /** Who is making this request, for the change log and the added-by columns. */
 var ACTOR = '';
-var KEEP_CREATED = '';      // set while restoring, so "added by" stays with whoever first added it
+var KEEP_CREATED = '';
+var ACTOR_PERSON = '';      // the person behind the link: '' for the shared main link      // set while restoring, so "added by" stays with whoever first added it
 function stamp(d) { return Utilities.formatDate(d instanceof Date ? d : new Date(d), tz(), 'yyyy-MM-dd HH:mm'); }
 function sameRow(a, b) {
   for (var i = 0; i < b.length; i++) {
@@ -929,9 +939,33 @@ function addSettlement(p) {
   ];
   var r = findRowById(SHEET_SETTLEMENTS, row[0]);          // upsert, as with expenses
   if (r > 0) sheet(SHEET_SETTLEMENTS).getRange(r, 1, 1, row.length).setValues([row]);
-  else sheet(SHEET_SETTLEMENTS).appendRow(row.concat([ACTOR, stamp(new Date())]));
+  else if (p._restore) sheet(SHEET_SETTLEMENTS).appendRow(row.concat([p.created_by || ACTOR, p.created_at || stamp(new Date()),
+      p.status || '', p.confirmed_by || '', p.confirmed_at || '', p.dispute_note || '']));
+  else {
+    // The person paid logging it is them saying they got it. Anyone else's waits for them.
+    // Occurrences of a recurring transfer are taken as agreed when it was set up.
+    var mine = ACTOR_PERSON && ACTOR_PERSON === row[2];
+    var status = ACTOR === 'Recurring' ? '' : mine ? 'confirmed' : 'pending';
+    sheet(SHEET_SETTLEMENTS).appendRow(row.concat([ACTOR, stamp(new Date()), status,
+      mine ? ACTOR_PERSON : '', mine ? stamp(new Date()) : '', '']));
+  }
   return { id: row[0], from: row[1], to: row[2], amount_aud: row[3],
            date: row[4], note: row[5], project_id: row[6], currency: row[7], amount_local: row[8] };
+}
+
+/**
+ * Only the person paid, on their own link, can confirm or dispute a payment to
+ * them: the shared main link can't vouch for anyone.
+ */
+function answerSettlement(id, answer, note) {
+  var r = findRowById(SHEET_SETTLEMENTS, id);
+  if (r < 0) throw new Error('That settlement is no longer there.');
+  var st = getSettlements().filter(function (x) { return x.id === String(id); })[0];
+  if (!ACTOR_PERSON || ACTOR_PERSON !== st.to) throw new Error('Only ' + st.to + ', on their own link, can confirm or dispute this payment.');
+  var col = HEADERS[SHEET_SETTLEMENTS].indexOf('status') + 1;
+  sheet(SHEET_SETTLEMENTS).getRange(r, col, 1, 4).setValues([[answer, ACTOR_PERSON, stamp(new Date()),
+    answer === 'disputed' ? String(note || '').slice(0, 200) : '']]);
+  return getSettlements().filter(function (x) { return x.id === String(id); })[0];
 }
 
 function deleteSettlement(id, batch) {
@@ -955,7 +989,7 @@ function deleteSettlement(id, batch) {
 
 var CHANGE_TYPES = {
   addExpense: 'expense', updateExpense: 'expense', deleteExpense: 'expense',
-  addSettlement: 'settlement', deleteSettlement: 'settlement',
+  addSettlement: 'settlement', deleteSettlement: 'settlement', confirmSettlement: 'settlement', disputeSettlement: 'settlement',
   addProject: 'project', updateProject: 'project', deleteProject: 'project',
   addRecurring: 'recurring', updateRecurring: 'recurring', deleteRecurring: 'recurring',
   restoreDeleted: 'restore',
@@ -1014,6 +1048,8 @@ function changeSummary(t, action, b, a, p) {
   }
   if (t === 'settlement') {
     var s = o.from + ' → ' + o.to + ' ' + (o.currency || 'AUD') + ' ' + money(o.amount_local || o.amount_aud);
+    if (action === 'confirmSettlement') return 'Confirmed receiving ' + s;
+    if (action === 'disputeSettlement') return 'Disputed ' + s + (o.dispute_note ? ': "' + o.dispute_note + '"' : '');
     return (!b ? 'Logged settlement ' : !a ? 'Removed settlement ' : 'Changed settlement ') + s;
   }
   if (t === 'project') return (!b ? 'Added project "' : !a ? 'Deleted project "' : 'Changed project "') + o.name + '"' + (b && a ? ': ' + fieldDiff(b, a) : '');
@@ -1120,7 +1156,7 @@ function restoreDeleted(type, id) {
   list.forEach(function (x) {
     if (x.type === 'project') updateProject(x.item);
     else if (x.type === 'expense') { KEEP_CREATED = x.item.created_by || ''; try { addExpense(x.item); } finally { KEEP_CREATED = ''; } }
-    else if (x.type === 'settlement') addSettlement(x.item);
+    else if (x.type === 'settlement') addSettlement(Object.assign({}, x.item, { _restore: true }));
     else if (x.type === 'recurring') saveRecurring(x.item, false);
     sheet(SHEET_DELETED).getRange(x.row, 9, 1, 2).setValues([[done, ACTOR]]);
   });
@@ -1531,6 +1567,11 @@ function guestAction(who, action, p, req) {
       var oldS = rowById(SHEET_SETTLEMENTS, p.id);
       if (oldS) guestCheckSettlement(who, projects, { from: oldS[1], to: oldS[2], project_id: oldS[6] });
       return { settlement: addSettlement(p) };
+    case 'confirmSettlement':
+    case 'disputeSettlement':
+      var ans = rowById(SHEET_SETTLEMENTS, p.id);
+      if (ans) guestCheckSettlement(who, projects, { from: ans[1], to: ans[2], project_id: ans[6] });
+      return { settlement: answerSettlement(p.id, action === 'confirmSettlement' ? 'confirmed' : 'disputed', p.note) };
     case 'deleteSettlement':
       var s = rowById(SHEET_SETTLEMENTS, p.id);
       if (s) guestCheckSettlement(who, projects, { from: s[1], to: s[2], project_id: s[6] });

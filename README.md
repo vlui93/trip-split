@@ -277,6 +277,22 @@ already landed is not recorded, so the log isn't cluttered with retries. Invite
 links appear only as their first six characters. Full-access phones show the
 newest 40 entries under **Settings → Recent changes**.
 
+### Confirming settlements
+
+A payment logged by anyone other than the person being paid shows **Waiting for
+[name] to confirm**. That person sees "N payments to you to confirm" on Home, and
+**Confirm received** / **Not received** in the settlement log. Only they can
+answer, on their own link: the shared main link can't vouch for anyone.
+
+- If the person being paid logs it themselves, it's confirmed straight away.
+- A waiting payment still counts in balances, so nobody is asked to pay twice
+  while they wait for an answer.
+- **Not received** marks it disputed, with an optional note. It stops counting
+  until it's confirmed after all or deleted.
+- Each confirm and dispute goes in the change log. The status appears in the
+  Settlements sheet and in the Excel export. Occurrences of a recurring transfer
+  count as agreed when it was set up, and older settlements have no status.
+
 ### Deleted items
 
 Nothing is lost on delete. Deleting an expense, a settlement or a project first
@@ -443,7 +459,7 @@ shows a warning first.
 | `People` | name, currency (blank = AUD) |
 | `Expenses` | id, date, city, description, paid_by, currency, amount_local, amount_aud, split_type, split_detail_json, item_breakdown_json, project_id, category, created_by, updated_by, updated_at |
 | `ExchangeRates` | currency, rate_to_aud, last_updated, is_manual_override |
-| `Settlements` | id, from, to, amount_aud, date, note, project_id, currency, amount_local, created_by, created_at |
+| `Settlements` | id, from, to, amount_aud, date, note, project_id, currency, amount_local, created_by, created_at, status, confirmed_by, confirmed_at, dispute_note |
 | `Recurring` | id, project_id, kind, frequency, start_date, end_date, generated_through, paused, template_json |
 | `Access` | token, person, project_ids, created, revoked, role (`guest` or `member`; one row per link) |
 | `Changes` | when, who, action, type, id, summary, before_json, after_json (append-only) |
@@ -504,6 +520,6 @@ no rows.
 |---|---|
 | `index.html` | The whole frontend: markup, styles and logic |
 | `Code.gs` | Apps Script backend |
-| `tests/` | `node tests/<name>.test.mjs`: receipt parsing, the currency ledger, categories and the breakdown, the Excel export, the Report tab, statement import, invite access control, the change log, and deleted items (runs `Code.gs` against a fake Sheet in `fake-gas.mjs`) |
+| `tests/` | `node tests/<name>.test.mjs`: receipt parsing, the currency ledger, categories and the breakdown, the Excel export, the Report tab, statement import, invite access control, the change log, deleted items, and settlement confirmation (runs `Code.gs` against a fake Sheet in `fake-gas.mjs`) |
 | `manifest.webmanifest` | Web app manifest |
 | `icon-*-v2.png`, `mkicon.py`, `icon.svg` | Home-screen icons and the script that generates them |
