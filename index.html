@@ -229,6 +229,7 @@ select{background-image:linear-gradient(45deg,transparent 50%,var(--muted) 50%),
 .banner.warn{background:var(--warn-soft);color:var(--warn)}
 .banner.bad{background:var(--neg-soft);color:var(--neg)}
 .banner.ok{background:var(--pos-soft);color:var(--pos)}
+.xfer.flash{background:var(--accent-soft);border-radius:12px;transition:background .3s}
 .toast-undo{float:right;margin-left:12px;font-weight:750;color:inherit;text-decoration:underline;text-underline-offset:3px}
 .toast{position:fixed;left:16px;right:16px;bottom:calc(var(--nav-h) + 12px);z-index:90;background:var(--text);color:var(--bg);padding:13px 15px;border-radius:13px;font-size:14px;font-weight:600;box-shadow:0 10px 30px -8px rgba(0,0,0,.5);opacity:0;visibility:hidden;transform:translateY(24px) scale(.96);transition:opacity .2s,transform .26s cubic-bezier(.2,.8,.25,1),visibility .26s}
 .toast.on{opacity:1;visibility:visible;transform:none}
@@ -1672,12 +1673,14 @@ function renderSettle(){
 
   const log = pSettlements().slice().sort(byDateDesc);
   $('#settleLog').innerHTML = log.length ? monthGroups('settle', log, st => `
-    <div class="xfer">
+    <div class="xfer" id="st-${esc(st.id)}">
       <div class="ic" style="width:40px;height:40px;border-radius:11px;background:var(--surface-2);display:grid;place-items:center">${st.status === 'pending' ? '⏳' : st.status === 'disputed' ? '!' : '✓'}</div>
       <div class="grow">
         <div style="font-weight:620">${esc(st.from)} <span class="arrow">→</span> ${esc(st.to)}</div>
         <div style="font-size:12.5px;color:var(--muted)">${isOccurrence(st.id)?'↻ ':''}${esc(st.date)}${st.note?' · '+esc(st.note):''}</div>
         ${settleStatus(st)}
+        ${!linkPerson() && PREFS.me && PREFS.me === st.to && st.status === 'pending'
+          ? `<div style="font-size:12.5px;color:var(--muted);margin-top:4px">To confirm, open the app with your own link (Settings → Links and invites).</div>` : ''}
         ${canAnswer(st) ? `<div class="row" style="gap:6px;margin-top:8px">
           <button class="btn sm primary" data-stok="${esc(st.id)}">Confirm received</button>
           ${st.status === 'pending' ? `<button class="btn sm ghost" data-stno="${esc(st.id)}">Not received</button>` : ''}</div>` : ''}
@@ -2720,7 +2723,7 @@ function renderBreakdown(){
 
 /* attn:start — pure, exercised by tests/attention.test.mjs */
 /**
- * d: { expenses (this project), settlements (all), people (this project), me,
+ * d: { expenses (this project), settlements (all), people (this project), me, ownLink (bool),
  *      queueErrors, importLeft, today, rateOf(cur), dismissed: {key:1}, catOf(id) }
  * → [{ key, kind, title, detail, id?, ids?, dismiss? }], most urgent first.
  */
@@ -2730,10 +2733,14 @@ function needsAttention(d){
   const money = (n, cur) => (cur && cur !== 'AUD' ? cur + ' ' : 'A$') + (Number(n) || 0).toFixed(2);
   const add = it => { if (!d.dismissed[it.key]) out.push(it); };
 
+  let needLink = 0;
   d.settlements.forEach(st => {
     const amt = money(st.currency && st.currency !== 'AUD' ? st.amount_local : st.amount_aud, st.currency);
-    if (d.me && st.to === d.me && st.status === 'pending')
-      add({ key: 'confirm:' + st.id, kind: 'confirm', id: st.id, title: `Confirm ${st.from}'s payment of ${amt}`, detail: `Logged ${st.date} — did it arrive?` });
+    // Only the person paid, on their own link, can answer; on the shared link say so instead.
+    if (d.me && st.to === d.me && st.status === 'pending'){
+      if (d.ownLink) add({ key: 'confirm:' + st.id, kind: 'confirm', id: st.id, title: `Confirm ${st.from}'s payment of ${amt}`, detail: `Logged ${st.date} — did it arrive?` });
+      else needLink++;
+    }
     if (d.me && st.from === d.me && st.status === 'disputed')
       add({ key: 'disputed:' + st.id, kind: 'disputed', id: st.id, title: `${st.to} says your ${amt} didn't arrive`,
             detail: st.dispute_note ? `“${st.dispute_note}”` : 'Check with them, then fix or delete it' });
@@ -2741,6 +2748,8 @@ function needsAttention(d){
       add({ key: 'stale:' + st.id, kind: 'stale', id: st.id, dismiss: true, title: `${st.to} hasn't confirmed your ${amt}`,
             detail: `Waiting since ${st.date}` });
   });
+  if (needLink) add({ key: 'needlink', kind: 'needlink', title: `${needLink} payment${needLink > 1 ? 's' : ''} to you waiting to be confirmed`,
+                      detail: 'Confirming needs your own link — this phone is on the shared one. Make yourself a full-access link.' });
   if (d.queueErrors) add({ key: 'sync', kind: 'sync', title: `${d.queueErrors} change${d.queueErrors > 1 ? 's' : ''} couldn't sync`, detail: 'See why, then retry or discard' });
   if (d.importLeft) add({ key: 'import', kind: 'import', title: `${d.importLeft} statement line${d.importLeft > 1 ? 's' : ''} to review`, detail: 'Your import is waiting where you left it' });
 
@@ -2771,18 +2780,18 @@ function needsAttention(d){
     if (!ex.category || !d.catOf(ex.category))
       add({ key: 'nocat:' + ex.id, kind: 'nocat', id: ex.id, dismiss: true, title: `No category: ${name}`, detail: `${ex.date} · ${money(ex.amount_local, ex.currency)}` });
   });
-  const order = ['confirm', 'disputed', 'sync', 'import', 'dup', 'norate', 'gone', 'stale', 'nocat'];
+  const order = ['confirm', 'needlink', 'disputed', 'sync', 'import', 'dup', 'norate', 'gone', 'stale', 'nocat'];
   return out.sort((a, b) => order.indexOf(a.kind) - order.indexOf(b.kind));
 }
 /* attn:end */
 
-const ATTN_ICON = { confirm: '⏳', disputed: '!', stale: '⏳', sync: '⚠', import: '🏦', dup: '⧉', norate: '¤', gone: '👤', nocat: '🏷' };
-const ATTN_DO = { confirm: 'Review', disputed: 'Review', stale: 'Review', sync: 'See why', import: 'Continue', dup: 'Compare', norate: 'Fix', gone: 'Fix', nocat: 'Set' };
+const ATTN_ICON = { needlink: '🔗', confirm: '⏳', disputed: '!', stale: '⏳', sync: '⚠', import: '🏦', dup: '⧉', norate: '¤', gone: '👤', nocat: '🏷' };
+const ATTN_DO = { needlink: 'Set up', confirm: 'Review', disputed: 'Review', stale: 'Review', sync: 'See why', import: 'Continue', dup: 'Compare', norate: 'Fix', gone: 'Fix', nocat: 'Set' };
 
 function attentionList(){
   const p = activeProject();
   return needsAttention({
-    expenses: pExpenses(), settlements: S.settlements || [], people: pPeople(), me: linkPerson() || PREFS.me,
+    expenses: pExpenses(), settlements: S.settlements || [], people: pPeople(), me: linkPerson() || PREFS.me, ownLink: !!linkPerson(),
     queueErrors: QUEUE.filter(j => j.err).length,
     importLeft: IMP && IMP.items ? IMP.items.filter(i => i.status === 'todo').length : 0,
     today: today(), dismissed: (PREFS.attnOff || {})[p ? p.id : ''] || {}, catOf,
@@ -2814,12 +2823,27 @@ function attnGo(key){
   const it = attentionList().find(x => x.key === key);
   if (!it) return;
   closeSheet('attnSheet');
-  if (['confirm', 'disputed', 'stale'].includes(it.kind)) go('settle');
+  if (['confirm', 'disputed', 'stale'].includes(it.kind)) showSettlement(it.id);
+  else if (it.kind === 'needlink'){ go('more'); setTimeout(() => { const b = $('#inviteBox'); if (b) b.scrollIntoView({ block: 'center' }); }, 50); }
   else if (it.kind === 'sync') go('home');
   else if (it.kind === 'import') openImport();
   else if (it.kind === 'dup'){ PREFS.histView = 'list'; HF = { city:'', person:'', cat:'', from:'', to:'' }; go('history');
     const [a] = it.ids; const ex = S.expenses.find(e => String(e.id) === a); if (ex){ HF.from = HF.to = ex.date; renderHistory(); } }
   else openEdit(it.id);
+}
+/** Settle up, on the project and month holding this settlement, with it in view. */
+function showSettlement(id){
+  const st = (S.settlements || []).find(x => String(x.id) === String(id));
+  if (!st) { go('settle'); return; }
+  if (st.project_id && st.project_id !== (activeProject() || {}).id) setActiveProject(st.project_id);
+  setFolded('settle', [monthKey(st.date)], false);
+  go('settle');
+  const row = document.getElementById('st-' + st.id);
+  if (row){
+    row.scrollIntoView({ block: 'center' });
+    row.classList.add('flash');
+    setTimeout(() => row.classList.remove('flash'), 1800);
+  }
 }
 function attnDismiss(key){
   const p = activeProject(), pid = p ? p.id : '';
