@@ -1,0 +1,100 @@
+name: Deploy backend
+
+# Pushes Code.gs to the Apps Script project and points the existing web-app
+# deployment at the new version, so the /exec URL on every phone stays the same.
+# One-time setup is in the README under "Automatic backend deploys".
+
+on:
+  push:
+    branches: [main]
+    paths: [Code.gs]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: deploy-backend
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    name: Push Code.gs and redeploy
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      CLASPRC_JSON: ${{ secrets.CLASPRC_JSON }}
+      SCRIPT_ID: ${{ secrets.SCRIPT_ID }}
+      DEPLOYMENT_ID: ${{ secrets.DEPLOYMENT_ID }}
+    steps:
+      - name: Check the secrets are set
+        id: ready
+        run: |
+          # Accept the whole /exec URL as well as the bare ID, and ignore stray spaces or line breaks.
+          id=$(printf '%s' "$DEPLOYMENT_ID" | tr -d '[:space:]' | sed -E 's#^.*/s/##; s#/(exec|dev).*$##')
+          if [ -n "$id" ]; then echo "::add-mask::$id"; fi
+          echo "DEPLOYMENT_ID=$id" >> "$GITHUB_ENV"
+          SCRIPT_ID=$(printf '%s' "$SCRIPT_ID" | tr -d '[:space:]')
+          echo "SCRIPT_ID=$SCRIPT_ID" >> "$GITHUB_ENV"
+          if [ -n "$CLASPRC_JSON" ] && [ -n "$SCRIPT_ID" ] && [ -n "$DEPLOYMENT_ID" ]; then
+            echo "go=yes" >> "$GITHUB_OUTPUT"
+          else
+            echo "::warning::Backend not deployed: the CLASPRC_JSON, SCRIPT_ID and DEPLOYMENT_ID secrets are not all set. Paste Code.gs by hand, or see the README."
+          fi
+
+      - uses: actions/checkout@v4
+        if: steps.ready.outputs.go == 'yes'
+      - uses: actions/setup-node@v4
+        if: steps.ready.outputs.go == 'yes'
+        with:
+          node-version: 22
+
+      - name: Backend tests
+        if: steps.ready.outputs.go == 'yes'
+        run: node tools/run-tests.mjs unit
+
+      - name: Install clasp
+        if: steps.ready.outputs.go == 'yes'
+        run: npm install --global @google/clasp@3.4.1
+
+      - name: Push Code.gs
+        if: steps.ready.outputs.go == 'yes'
+        run: |
+          umask 077
+          printf '%s' "$CLASPRC_JSON" > "$HOME/.clasprc.json"
+          mkdir "$RUNNER_TEMP/gas" && cd "$RUNNER_TEMP/gas"
+          printf '{"scriptId":"%s","rootDir":"."}\n' "$SCRIPT_ID" > .clasp.json
+          # Keep the project's own manifest (time zone, web-app settings); replace only the code.
+          clasp pull
+          find . -maxdepth 1 -type f \( -name '*.js' -o -name '*.gs' \) -delete
+          cp "$GITHUB_WORKSPACE/Code.gs" Code.gs
+          node "$GITHUB_WORKSPACE/tools/gas-manifest.mjs" appsscript.json
+          clasp push --force
+
+      - name: Point the web app at the new version
+        if: steps.ready.outputs.go == 'yes'
+        working-directory: ${{ runner.temp }}/gas
+        run: |
+          if ! clasp list-deployments | grep -qF -- "$DEPLOYMENT_ID"; then
+            n=$(clasp list-deployments | grep -c '@[0-9]' || true)
+            echo "::error::The DEPLOYMENT_ID secret is not one of this script's $n versioned deployments. In the Apps Script editor open Deploy > Manage deployments, pick the web app the phones use, and copy its Deployment ID (it starts with AKfy and is the part of the /exec URL between /s/ and /exec)."
+            exit 1
+          fi
+          clasp deploy --deploymentId "$DEPLOYMENT_ID" --description "GitHub ${GITHUB_SHA::7}"
+
+      - name: Check the live version
+        if: steps.ready.outputs.go == 'yes'
+        run: |
+          want=$(grep -oP '^var API_VERSION = \K[0-9]+' Code.gs)
+          url="https://script.google.com/macros/s/$DEPLOYMENT_ID/exec?action=version"
+          for i in 1 2 3 4 5 6; do
+            got=$(curl -fsSL --max-time 30 "$url" | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{try{console.log(JSON.parse(s).apiVersion??"")}catch{console.log("")}})' || true)
+            if [ "$got" = "$want" ]; then echo "Live backend is version $got"; exit 0; fi
+            echo "Live backend says '${got:-nothing}', want $want; waiting"; sleep 10
+          done
+          echo "::error::Deployed, but the live web app does not report version $want."
+          exit 1
+
+      - name: Remove the credentials
+        if: always()
+        run: rm -f "$HOME/.clasprc.json"

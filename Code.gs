@@ -231,6 +231,8 @@ function doPost(e) {
 }
 
 function handle(e, req) {
+  // Which backend is live: no token needed, and it says nothing else.
+  if (String(req.action || '') === 'version') return json({ ok: true, apiVersion: API_VERSION });
   var expected = PropertiesService.getScriptProperties().getProperty('API_TOKEN');
   if (!expected) return json({ ok: false, error: 'Backend not set up — run setup() in the script editor.' });
   var who = principal(String(req.token || ''), expected);
