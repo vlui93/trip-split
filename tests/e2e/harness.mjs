@@ -39,11 +39,28 @@ export async function setup(){
   const errors = [];
 
   /** A phone: its own storage, connected with `token` (or opened at `link`). */
-  async function phone({ token, link, dialogs } = {}){
+  async function phone({ token, link, dialogs, oldBackend } = {}){
     const c = await browser.newContext({ viewport: { width: 390, height: 844 }, deviceScaleFactor: 2 });
-    await c.route('https://script.google.com/**', r => r.fulfill({ status: 200, contentType: 'application/json',
-      body: gas.doPost({ postData: { contents: r.request().postData() || '{}' } }).s }));
+    const requests = [];      // every action this phone sent, in order
+    let down = false;
+    const batches = [];       // what each one-request sync carried
+    await c.route('https://script.google.com/**', r => {
+      if (down) return r.abort('internetdisconnected');
+      const body = r.request().postData() || '{}';
+      const req = JSON.parse(body);
+      requests.push(req.action);
+      if (req.action === 'sync') batches.push((req.jobs || []).map(j => j.action));
+      if (process.env.E2E_TRACE) console.log('  >', req.action, (req.jobs || []).map(j => j.action).join(','), req.rev ? 'rev' : '');
+      // `oldBackend` answers like a Sheet whose script predates the one-request sync.
+      const out = oldBackend && req.action === 'sync' ? JSON.stringify({ ok: false, error: 'Unknown action: sync' })
+        : gas.doPost({ postData: { contents: body } }).s;
+      return r.fulfill({ status: 200, contentType: 'application/json', body: out });
+    });
     const p = await c.newPage();
+    p.requests = requests;
+    p.batches = batches;
+    // No signal: requests to the backend fail; coming back fires the browser's 'online' event.
+    p.offline = async on => { down = on; if (!on) await p.evaluate(() => window.dispatchEvent(new Event('online'))); };
     p.on('pageerror', e => errors.push(e.message));
     p.on('dialog', d => (dialogs ? dialogs(d) : d.accept()));
     if (link){ await p.goto(link.replace(/^https?:\/\/[^/]+\//, site)); }

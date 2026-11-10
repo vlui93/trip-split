@@ -1300,32 +1300,66 @@ function applyBootstrap(d){
   if (mine && PREFS.me !== mine){ PREFS.me = mine; save(K_PREFS, PREFS); }
 }
 
-async function sync(force){
+// One request carries at most this many queued changes.
+const SYNC_CHUNK = 40;
+let LEGACY_SYNC = false;
+/** The revision a phone holds only counts for the link it was fetched with. */
+function revKey(){ return CFG ? CFG.url + '|' + CFG.token : ''; }
+
+async function sync(opts){
   if (syncing || !CFG || !CFG.url) return;
   syncing = true; lastSyncErr = ''; renderSync();
+  const sent = new Set();
   try {
-    // Push every queued change once. One the backend rejects is kept, marked, and
-    // retried next sync — but it no longer blocks the changes queued after it,
-    // which is what used to freeze a phone's sync for good. Going offline mid-way
-    // stops the round; nothing is lost.
-    const tried = new Set();
-    let job;
-    while ((job = QUEUE.find(j => !tried.has(j.qid)))){
-      tried.add(job.qid);
+    // The whole queue goes in one request and the fresh copy comes back with it.
+    // A change the backend rejects is kept, marked, and retried next sync, without
+    // blocking the ones after it. Going offline mid-way loses nothing.
+    const full = opts === true || !!(opts && opts.full);
+    let d = null;
+    if (!LEGACY_SYNC){
       try {
-        await call(job.action, job.payload);
-        QUEUE = QUEUE.filter(j => j.qid !== job.qid);
+        do {
+          const jobs = QUEUE.filter(j => !sent.has(j.qid)).slice(0, SYNC_CHUNK);
+          jobs.forEach(j => sent.add(j.qid));
+          const more = QUEUE.some(j => !sent.has(j.qid));
+          d = await call('sync', {}, { jobs: jobs.map(j => ({ qid:j.qid, action:j.action, payload:j.payload })),
+            noData: more, rev: !full && S.revFor === revKey() ? S.rev : '' });
+          const res = {}; (d.results || []).forEach(r => { res[r.qid] = r; });
+          QUEUE = QUEUE.filter(j => !(res[j.qid] && res[j.qid].ok));
+          QUEUE.forEach(j => { const r = res[j.qid];
+            if (r){ j.err = friendlyError(r.error); j.tries = (j.tries || 0) + 1; } });
+          save(K_QUEUE, QUEUE); renderSync();
+        } while (QUEUE.some(j => !sent.has(j.qid)));
       } catch(err){
-        if (err instanceof TypeError) throw err;
-        job.err = friendlyError(err.message);
-        job.tries = (job.tries || 0) + 1;
+        // A backend from before batching: fall back to one request per change.
+        if (!/Unknown action|Only the trip organiser/i.test(err.message || '')) throw err;
+        LEGACY_SYNC = true; d = null;
       }
-      save(K_QUEUE, QUEUE); renderSync();
     }
-
-    const d = await call('bootstrap', {}, { refreshRates: !!force && !GUEST() });
+    if (LEGACY_SYNC){
+      const tried = new Set();
+      let job;
+      while ((job = QUEUE.find(j => !tried.has(j.qid)))){
+        tried.add(job.qid);
+        try {
+          await call(job.action, job.payload);
+          QUEUE = QUEUE.filter(j => j.qid !== job.qid);
+        } catch(err){
+          if (err instanceof TypeError) throw err;
+          job.err = friendlyError(err.message);
+          job.tries = (job.tries || 0) + 1;
+        }
+        save(K_QUEUE, QUEUE); renderSync();
+      }
+      d = await call('bootstrap', {});
+    }
     BACKEND_OLD = !(Number(d.apiVersion) >= API_NEEDED);
+    if (d.unchanged){
+      // Nothing new in the Sheet: keep what this phone has.
+      if (d.serverDate && d.serverDate !== S.serverDate){ S.serverDate = d.serverDate; persist(); renderAll(); }
+    } else {
     applyBootstrap(d);
+    S.rev = d.rev || ''; S.revFor = revKey();
     // Changes still waiting are layered back on top, so the Sheet's copy never
     // hides something this phone has done but not yet delivered.
     replayQueue();
@@ -1334,6 +1368,7 @@ async function sync(force){
     autoPickProject();
     persist();
     renderAll();
+    }
   } catch(err){
     lastSyncErr = (err instanceof TypeError)
       ? "Can't reach Google right now — everything is saved on this phone."
@@ -4490,7 +4525,7 @@ $('#invShare').addEventListener('click', () => {
   else navigator.clipboard.writeText(INV_LINK).then(() => toast('Link copied'));
 });
 $('#syncBtn').addEventListener('click', () => sync());
-$('#forceSync').addEventListener('click', () => { sync(); toast('Syncing…'); });
+$('#forceSync').addEventListener('click', () => { sync({ full:true }); toast('Syncing…'); });
 $('#refreshRates').addEventListener('click', async () => {
   toast('Fetching rates…');
   try { const d = await call('refreshRates', {}); S.rates = d.rates; persist(); renderMore(); toast('Rates updated'); }
