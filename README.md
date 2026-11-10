@@ -74,6 +74,45 @@ For later updates, use **Deploy → Manage deployments → edit → Version: New
 version**. A *new deployment* gets a new URL, and every phone would have to
 reconnect.
 
+### Automatic backend deploys (optional)
+
+Once this is set up, merging a change to `Code.gs` updates the Sheet's script
+and the web app by itself, with the same `/exec` URL. Until it is, the
+*Deploy backend* workflow skips with a warning and you paste `Code.gs` by hand
+as above.
+
+It needs three repository secrets (**Settings → Secrets and variables →
+Actions → New repository secret**):
+
+| Secret | What it is |
+|---|---|
+| `SCRIPT_ID` | Apps Script editor → **Project Settings** (gear) → *Script ID* |
+| `DEPLOYMENT_ID` | **Deploy → Manage deployments** → *Deployment ID*. It is also the long part of the `/exec` URL between `/s/` and `/exec` |
+| `CLASPRC_JSON` | The whole contents of the login file made in step 2 below |
+
+1. Turn on the Apps Script API for your Google account at
+   <https://script.google.com/home/usersettings>.
+2. On a computer with Node.js, as the Google account that owns the Sheet:
+
+   ```sh
+   npx @google/clasp@3.4.1 login
+   ```
+
+   Approve it in the browser. That writes `~/.clasprc.json` (on Windows,
+   `C:\Users\<you>\.clasprc.json`). Paste the whole file into the
+   `CLASPRC_JSON` secret.
+3. Add the other two secrets, then run it once by hand: **Actions → Deploy
+   backend → Run workflow**. The last step asks the live web app for its
+   version and fails if it is not the one in `Code.gs`.
+
+The login file lets its holder edit your Apps Script projects, so keep it only
+in the secret: never commit it or paste it into a chat. To cut it off, remove
+*clasp* at <https://myaccount.google.com/permissions>. The workflow runs only
+on `main`, never on pull requests. It keeps the project's own manifest and
+replaces only the code. A change that needs a new permission (a Google service
+the script has not used before) still needs one manual run of any function in
+the editor to approve it.
+
 ### 3. Connect a phone
 
 Open the live app in Safari, paste the `/exec` URL and the token, and tap
@@ -521,8 +560,9 @@ no rows.
 - **"Backend returned non-JSON".** The deployment's access is not set to
   *Anyone*.
 - **"The Sheet's script is older than this app."** The app needs a newer
-  backend than the one deployed. Repaste `Code.gs`, then **Deploy → Manage
-  deployments → edit → New version**, and tap **Try again** on the phone.
+  backend than the one deployed. With automatic deploys, check the *Deploy
+  backend* run under **Actions**. Otherwise repaste `Code.gs`, then **Deploy →
+  Manage deployments → edit → New version**. Then tap **Try again** on the phone.
   Changes made in the meantime are kept on the phone.
 - **"N changes couldn't sync."** The message under it gives the reason. **Try
   again** retries them; **Discard** drops them from that phone.
@@ -538,5 +578,8 @@ no rows.
 | `index.html` | The whole frontend: markup, styles and logic |
 | `Code.gs` | Apps Script backend |
 | `tests/` | `node tests/<name>.test.mjs`: receipt parsing, the currency ledger, categories and the breakdown, the Excel export, the Report tab, statement import, invite access control, the change log, deleted items, settlement confirmation, and the needs-attention list (runs `Code.gs` against a fake Sheet in `fake-gas.mjs`) |
+| `tests/e2e/` | Browser tests: phone-sized Chromium pages driving the real app against `Code.gs` on the fake Sheet. Needs Playwright (`npm install --no-save playwright`) |
+| `tools/run-tests.mjs` | `node tools/run-tests.mjs [unit\|e2e]` runs them all |
+| `.github/workflows/` | `test.yml` runs every test on each pull request; `deploy.yml` pushes `Code.gs` to Apps Script on merge |
 | `manifest.webmanifest` | Web app manifest |
 | `icon-*-v2.png`, `mkicon.py`, `icon.svg` | Home-screen icons and the script that generates them |
