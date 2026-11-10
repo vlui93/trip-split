@@ -30,6 +30,12 @@ jobs:
       - name: Check the secrets are set
         id: ready
         run: |
+          # Accept the whole /exec URL as well as the bare ID, and ignore stray spaces or line breaks.
+          id=$(printf '%s' "$DEPLOYMENT_ID" | tr -d '[:space:]' | sed -E 's#^.*/s/##; s#/(exec|dev).*$##')
+          if [ -n "$id" ]; then echo "::add-mask::$id"; fi
+          echo "DEPLOYMENT_ID=$id" >> "$GITHUB_ENV"
+          SCRIPT_ID=$(printf '%s' "$SCRIPT_ID" | tr -d '[:space:]')
+          echo "SCRIPT_ID=$SCRIPT_ID" >> "$GITHUB_ENV"
           if [ -n "$CLASPRC_JSON" ] && [ -n "$SCRIPT_ID" ] && [ -n "$DEPLOYMENT_ID" ]; then
             echo "go=yes" >> "$GITHUB_OUTPUT"
           else
@@ -68,7 +74,13 @@ jobs:
       - name: Point the web app at the new version
         if: steps.ready.outputs.go == 'yes'
         working-directory: ${{ runner.temp }}/gas
-        run: clasp deploy --deploymentId "$DEPLOYMENT_ID" --description "GitHub ${GITHUB_SHA::7}"
+        run: |
+          if ! clasp list-deployments | grep -qF -- "$DEPLOYMENT_ID"; then
+            n=$(clasp list-deployments | grep -c '@[0-9]' || true)
+            echo "::error::The DEPLOYMENT_ID secret is not one of this script's $n versioned deployments. In the Apps Script editor open Deploy > Manage deployments, pick the web app the phones use, and copy its Deployment ID (it starts with AKfy and is the part of the /exec URL between /s/ and /exec)."
+            exit 1
+          fi
+          clasp deploy --deploymentId "$DEPLOYMENT_ID" --description "GitHub ${GITHUB_SHA::7}"
 
       - name: Check the live version
         if: steps.ready.outputs.go == 'yes'
