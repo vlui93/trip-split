@@ -8,12 +8,9 @@ import { loadBackend } from './fake-gas.mjs';
 
 const html = readFileSync(new URL('../index.html', import.meta.url), 'utf8');
 const between = (a, b) => html.slice(html.indexOf(a), html.indexOf(b));
-// The app's allocate() and sharesOf(), with the project's people passed in.
-const appShares = new Function('PEOPLE', `
-  const cents = n => Math.round((Number(n)||0)*100);
-  const pPeople = () => PEOPLE, S = { people: PEOPLE };
-  ${between('/** Split `totalC` cents', '/* ============================================================\n   Who settles in what')}
-  return sharesOf;`);
+// The app's share maths: shared.js, with the project's people passed in as the app does.
+const { sharesFor } = new Function(readFileSync(new URL('../shared.js', import.meta.url), 'utf8') + '; return { sharesFor };')();
+const appShares = members => ex => sharesFor(ex, members);
 const { xlsxBuild } = new Function(between('/* xlsx:start', '/* xlsx:end */') + '; return { xlsxBuild };')();
 
 const { ctx, book, owner } = loadBackend();

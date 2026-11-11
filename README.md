@@ -47,7 +47,9 @@ one, see below).
 
 1. Open <https://sheets.new> and give the spreadsheet a name.
 2. Choose **Extensions → Apps Script**, delete the placeholder code, paste in
-   all of [`Code.gs`](Code.gs) and save.
+   all of [`Code.gs`](Code.gs). Then add a second script file (**+ → Script**),
+   name it `shared`, paste in all of [`shared.js`](shared.js), and save. The
+   app loads the same `shared.js`, so the two always split a bill the same way.
 3. In the function dropdown, **select `setup` explicitly**, then click **Run**.
    The dropdown defaults to the first function in the file, so check it.
 4. Approve the authorization prompt. Google shows *"Google hasn't verified this
@@ -76,9 +78,9 @@ reconnect.
 
 ### Automatic backend deploys (optional)
 
-Once this is set up, merging a change to `Code.gs` updates the Sheet's script
+Once this is set up, merging a change to `Code.gs` or `shared.js` updates the Sheet's script
 and the web app by itself, with the same `/exec` URL. Until it is, the
-*Deploy backend* workflow skips with a warning and you paste `Code.gs` by hand
+*Deploy backend* workflow skips with a warning and you paste both files by hand
 as above.
 
 It needs three repository secrets (**Settings → Secrets and variables →
@@ -149,7 +151,14 @@ from the link used, never by the phone. To move the group over:
 2. Each person opens their own link on their phone. In the home-screen app,
    they paste it into the Connect screen. Check that History → Activity
    shows "You're using …'s own link".
-3. Once everyone is switched, run `resetToken()` in the script editor if you want
+3. Once everyone is switched, retire the shared link: on your own link, open
+   **More → Links and invites → Retire the main link**. From then on the old
+   shared link is refused, and a phone still using it is shown **Connect with my
+   own link**; anything it had waiting goes up under the new link. **Bring the
+   main link back** in the same place undoes it, and so does running
+   `restoreMainLink()` in the script editor. While it is retired, the last
+   full-access link can't be turned off.
+4. Or, more drastic: run `resetToken()` in the script editor if you want
    the old shared link to stop working. Do this last: a phone still on the main
    link is locked out once the token is reset.
 
@@ -552,7 +561,8 @@ is `{ token, action, payload }`. Every response is either `{ ok: true, … }` or
 |---|---|
 | `bootstrap` | — (creates due recurring items, returns everything) |
 | `sync` | at the top level, not in `payload`: `{ jobs: [{ qid, action, payload }], rev }`. Runs the jobs in order, returns `results: [{ qid, ok, error }]` and everything `bootstrap` returns plus `rev`. With no jobs and the current `rev`, it returns `{ unchanged: true }` instead |
-| `version` | no token: `{ apiVersion }` |
+| `version` | no token: `{ apiVersion, shared }` (`shared` is false if `shared.js` is missing from the script) |
+| `retireMainLink` / `restoreMainLink` | —, from a full-access personal link only |
 | `addExpense` / `updateExpense` / `deleteExpense` | expense, or `{ id }` |
 | `addSettlement` / `deleteSettlement` | settlement, or `{ id }` |
 | `addProject` / `updateProject` / `deleteProject` | project, or `{ id }` |
@@ -605,6 +615,7 @@ to one request per change.
 |---|---|
 | `index.html` | The whole frontend: markup, styles and logic |
 | `Code.gs` | Apps Script backend |
+| `shared.js` | Categories, split labels and the share maths: loaded by the app and pushed to Apps Script next to `Code.gs` |
 | `tests/` | `node tests/<name>.test.mjs`: receipt parsing, the currency ledger, categories and the breakdown, the Excel export, the Report tab, statement import, invite access control, the change log, deleted items, settlement confirmation, and the needs-attention list (runs `Code.gs` against a fake Sheet in `fake-gas.mjs`) |
 | `tests/e2e/` | Browser tests: phone-sized Chromium pages driving the real app against `Code.gs` on the fake Sheet. Needs Playwright (`npm install --no-save playwright`) |
 | `tools/run-tests.mjs` | `node tools/run-tests.mjs [unit\|e2e]` runs them all |

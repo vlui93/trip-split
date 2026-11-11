@@ -72,6 +72,8 @@ export function loadBackend(){
     console,
   };
   vm.createContext(ctx);
+  // Apps Script gives every file one global scope; shared.js is the second file.
+  vm.runInContext(readFileSync(new URL('../shared.js', import.meta.url), 'utf8'), ctx);
   vm.runInContext(readFileSync(new URL('../Code.gs', import.meta.url), 'utf8'), ctx);
   ctx.setup();
   return { ctx, book, owner: props.API_TOKEN, props };

@@ -125,7 +125,7 @@ t('an unknown token is refused, and a turned-off invite says so', () => {
 
 t('anyone can ask which version is live, and learns nothing else', () => {
   const r = JSON.parse(ctx.doGet({ parameter: { action: 'version' } }).s);
-  assert.deepEqual(Object.keys(r).sort(), ['apiVersion', 'ok']);
+  assert.deepEqual(Object.keys(r).sort(), ['apiVersion', 'ok', 'shared']);
   assert.equal(r.apiVersion, ok(api(owner, 'bootstrap', {})).apiVersion);
   refused(JSON.parse(ctx.doGet({ parameter: { action: 'bootstrap' } }).s), /Bad token/);
 });

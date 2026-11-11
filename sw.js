@@ -8,8 +8,8 @@
 // receipt reader (ocr/) is large and never changes within a version, so it's
 // cache-first and only stored once downloaded from Settings.
 const OCR_CACHE   = 'ocr-7.0.0';   // keep in step with OCR_CACHE in index.html
-const SHELL_CACHE = 'shell-v1';
-const SHELL = ['./', 'index.html', 'manifest.webmanifest', 'icon.svg',
+const SHELL_CACHE = 'shell-v2';
+const SHELL = ['./', 'index.html', 'shared.js', 'manifest.webmanifest', 'icon.svg',
   'icon-32-v2.png', 'icon-120-v2.png', 'icon-152-v2.png', 'icon-167-v2.png',
   'icon-180-v2.png', 'icon-192-v2.png', 'icon-512-v2.png'];
 const NETWORK_WAIT = 4000;
