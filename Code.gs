@@ -32,7 +32,7 @@ var DEFAULT_CURRENCIES = ['AUD'];
 
 // Bump when the app starts relying on something new here. The app compares it and
 // says "redeploy" in plain words instead of failing on an unknown action.
-var API_VERSION = 9;
+var API_VERSION = 10;
 
 /** Every currency the sheet knows about. AUD is always first and always present. */
 function CURRENCIES() {
@@ -261,6 +261,17 @@ function handle(e, req) {
     }
   }
 
+  // Nothing to deliver and nothing new since this phone last looked: say so and
+  // skip reading the whole Sheet. Once a day everyone gets a full copy regardless,
+  // which is also when rates refresh and recurring items fall due.
+  var today = ymd(new Date());
+  if (action === 'sync' && req.rev && !req.refreshRates && !(req.jobs && req.jobs.length)) {
+    var seen = PropertiesService.getScriptProperties().getProperties();
+    if (seen.REV === String(req.rev) && seen.REV_DAY === today) {
+      return json({ ok: true, unchanged: true, rev: seen.REV, apiVersion: API_VERSION, serverDate: today });
+    }
+  }
+
   var lock = LockService.getScriptLock();
   try {
     lock.waitLock(25000);
@@ -269,50 +280,30 @@ function handle(e, req) {
   }
   try {
     var out;
-    var before = CHANGE_TYPES[action] ? changeSnapshot(action, payload) : undefined;
-
-    if (!who.owner) {
-      out = guestAction(who, action, payload, req);
-      logChange(action, payload, before);
-      afterRequest(action);
-      out.ok = true;
-      return json(out);
+    if (action === 'sync') {
+      // A phone's whole queue in one request: each change is tried in order, one
+      // that is refused does not stop the rest, and the fresh copy comes back with it.
+      var results = [];
+      (Array.isArray(req.jobs) ? req.jobs : []).slice(0, MAX_BATCH).forEach(function (job) {
+        var a = String((job && job.action) || '');
+        try {
+          if (!a || NOT_BATCHED[a]) throw new Error('Unknown action: ' + a);
+          runAction(who, a, job.payload || {}, {});
+          results.push({ qid: job.qid, ok: true });
+        } catch (err) {
+          results.push({ qid: job.qid, ok: false, error: String(err && err.message ? err.message : err) });
+        }
+      });
+      out = req.noData ? { apiVersion: API_VERSION } : runAction(who, 'bootstrap', {}, req);
+      out.results = results;
+    } else {
+      out = runAction(who, action, payload, req);
     }
-
-    switch (action) {
-      case 'bootstrap':    out = bootstrap(!!req.refreshRates); break;
-      case 'addExpense':   out = { expense: addExpense(payload) }; break;
-      case 'addRecurring': out = { rule: saveRecurring(payload, true) }; break;
-      case 'updateRecurring': out = { rule: saveRecurring(payload, false) }; break;
-      case 'deleteRecurring': out = { id: deleteRecurring(payload.id) }; break;
-      case 'updateExpense':out = { expense: updateExpense(payload) }; break;
-      case 'deleteExpense':out = { id: deleteExpense(payload.id) }; break;
-      case 'setPeople':    out = { people: setPeople(payload.people, payload.renames) }; break;
-      case 'setPersonCurrency': out = { personCur: setPersonCurrency(payload.name, payload.currency) }; break;
-      case 'createInvite': out = { invite: createInvite(payload) }; break;
-      case 'revokeInvite': out = { invite: revokeInvite(payload.token) }; break;
-      case 'setRate':      out = { rates: setRate(payload.currency, payload.rate_to_aud) }; break;
-      case 'addCurrency':  out = { rates: addCurrency(payload.currency) }; break;
-      case 'removeCurrency': out = { rates: removeCurrency(payload.currency) }; break;
-      case 'clearOverride':out = { rates: clearOverride(payload.currency) }; break;
-      case 'refreshRates': out = { rates: refreshRates(true) }; break;
-      case 'addProject':   out = { project: addProject(payload) }; break;
-      case 'updateProject':out = { project: updateProject(payload) }; break;
-      case 'deleteProject':out = { id: deleteProject(payload.id) }; break;
-      case 'addSettlement':out = { settlement: addSettlement(payload) }; break;
-      case 'deleteSettlement': out = { id: deleteSettlement(payload.id) }; break;
-      case 'restoreDeleted': out = { restored: restoreDeleted(payload.type, payload.id) }; break;
-      case 'confirmSettlement': out = { settlement: answerSettlement(payload.id, 'confirmed') }; break;
-      case 'disputeSettlement': out = { settlement: answerSettlement(payload.id, 'disputed', payload.note) }; break;
-      default: return json({ ok: false, error: 'Unknown action: ' + action });
+    if (action === 'bootstrap' || (action === 'sync' && !req.noData)) {
+      var props = PropertiesService.getScriptProperties();
+      if (req.refreshRates || props.getProperty('REV_DAY') !== today) { bumpRev(); props.setProperty('REV_DAY', today); }
+      out.rev = props.getProperty('REV') || '';
     }
-    if (action === 'bootstrap') {
-      out.whoami = { person: who.person || '', role: who.member ? 'member' : 'main' };
-      out.changes = recentChanges(40);
-      out.deleted = recentlyDeleted(50);
-    }
-    logChange(action, payload, before);
-    afterRequest(action);
     out.ok = true;
     return json(out);
   } catch (err) {
@@ -320,6 +311,70 @@ function handle(e, req) {
   } finally {
     lock.releaseLock();
   }
+}
+
+var MAX_BATCH = 100;
+var NOT_BATCHED = { sync: 1, bootstrap: 1, version: 1, aiStatus: 1, parseReceipt: 1, parseText: 1 };
+
+/** One action for whoever is asking, logged and counted like any other. */
+function runAction(who, action, payload, req) {
+  var before = CHANGE_TYPES[action] ? changeSnapshot(action, payload) : undefined;
+  var out = who.owner ? ownerAction(who, action, payload, req) : guestAction(who, action, payload, req);
+  logChange(action, payload, before);
+  afterRequest(action);
+  return out;
+}
+
+function ownerAction(who, action, payload, req) {
+  var out;
+  switch (action) {
+    case 'bootstrap':    out = bootstrap(!!req.refreshRates); break;
+    case 'addExpense':   out = { expense: addExpense(payload) }; break;
+    case 'addRecurring': out = { rule: saveRecurring(payload, true) }; break;
+    case 'updateRecurring': out = { rule: saveRecurring(payload, false) }; break;
+    case 'deleteRecurring': out = { id: deleteRecurring(payload.id) }; break;
+    case 'updateExpense':out = { expense: updateExpense(payload) }; break;
+    case 'deleteExpense':out = { id: deleteExpense(payload.id) }; break;
+    case 'setPeople':    out = { people: setPeople(payload.people, payload.renames) }; break;
+    case 'setPersonCurrency': out = { personCur: setPersonCurrency(payload.name, payload.currency) }; break;
+    case 'createInvite': out = { invite: createInvite(payload) }; break;
+    case 'revokeInvite': out = { invite: revokeInvite(payload.token) }; break;
+    case 'setRate':      out = { rates: setRate(payload.currency, payload.rate_to_aud) }; break;
+    case 'addCurrency':  out = { rates: addCurrency(payload.currency) }; break;
+    case 'removeCurrency': out = { rates: removeCurrency(payload.currency) }; break;
+    case 'clearOverride':out = { rates: clearOverride(payload.currency) }; break;
+    case 'refreshRates': out = { rates: refreshRates(true) }; break;
+    case 'addProject':   out = { project: addProject(payload) }; break;
+    case 'updateProject':out = { project: updateProject(payload) }; break;
+    case 'deleteProject':out = { id: deleteProject(payload.id) }; break;
+    case 'addSettlement':out = { settlement: addSettlement(payload) }; break;
+    case 'deleteSettlement': out = { id: deleteSettlement(payload.id) }; break;
+    case 'restoreDeleted': out = { restored: restoreDeleted(payload.type, payload.id) }; break;
+    case 'confirmSettlement': out = { settlement: answerSettlement(payload.id, 'confirmed') }; break;
+    case 'disputeSettlement': out = { settlement: answerSettlement(payload.id, 'disputed', payload.note) }; break;
+    default: throw new Error('Unknown action: ' + action);
+  }
+  if (action === 'bootstrap') {
+    out.whoami = { person: who.person || '', role: who.member ? 'member' : 'main' };
+    out.changes = recentChanges(40);
+    out.deleted = recentlyDeleted(50);
+  }
+  return out;
+}
+
+/**
+ * The Sheet's revision: any write moves it on, and a phone that already holds
+ * the current one is told "unchanged" instead of being sent everything again.
+ */
+function bumpRev() {
+  var props = PropertiesService.getScriptProperties();
+  var last = parseInt(props.getProperty('REV') || '0', 36) || 0;
+  props.setProperty('REV', Math.max(new Date().getTime(), last + 1).toString(36));   // always moves forward
+}
+
+/** Typing straight into the Sheet counts as a change too. */
+function onEdit() {
+  try { bumpRev(); } catch (e) {}
 }
 
 function json(obj) {
@@ -1215,6 +1270,7 @@ function afterRequest(action) {
     catch (err) { Logger.log('Report rebuild failed: ' + err); }
   } else if (['aiStatus', 'parseReceipt', 'parseText'].indexOf(action) < 0) {
     markReportDirty();
+    bumpRev();
   }
 }
 

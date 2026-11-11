@@ -56,7 +56,7 @@ export function loadBackend(){
   const ctx = {
     SpreadsheetApp: { getActiveSpreadsheet: () => book, getUi: () => { throw new Error('no ui'); }, openById: () => book,
       newDataValidation: () => { const b = { requireValueInList: () => b, requireDate: () => b, setAllowInvalid: () => b, build: () => ({}) }; return b; } },
-    PropertiesService: { getScriptProperties: () => ({ getProperty: k => props[k] ?? null, setProperty: (k, v) => { props[k] = v; }, deleteProperty: k => { delete props[k]; } }) },
+    PropertiesService: { getScriptProperties: () => ({ getProperties: () => Object.assign({}, props), getProperty: k => props[k] ?? null, setProperty: (k, v) => { props[k] = v; }, deleteProperty: k => { delete props[k]; } }) },
     LockService: { getScriptLock: () => ({ waitLock() {}, releaseLock() {} }) },
     ContentService: { MimeType: { JSON: 'json' }, createTextOutput: s => ({ s, setMimeType() { return this; } }) },
     Utilities: {
@@ -74,5 +74,5 @@ export function loadBackend(){
   vm.createContext(ctx);
   vm.runInContext(readFileSync(new URL('../Code.gs', import.meta.url), 'utf8'), ctx);
   ctx.setup();
-  return { ctx, book, owner: props.API_TOKEN };
+  return { ctx, book, owner: props.API_TOKEN, props };
 }

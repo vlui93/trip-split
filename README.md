@@ -535,6 +535,8 @@ is `{ token, action, payload }`. Every response is either `{ ok: true, … }` or
 | Action | Payload |
 |---|---|
 | `bootstrap` | — (creates due recurring items, returns everything) |
+| `sync` | at the top level, not in `payload`: `{ jobs: [{ qid, action, payload }], rev }`. Runs the jobs in order, returns `results: [{ qid, ok, error }]` and everything `bootstrap` returns plus `rev`. With no jobs and the current `rev`, it returns `{ unchanged: true }` instead |
+| `version` | no token: `{ apiVersion }` |
 | `addExpense` / `updateExpense` / `deleteExpense` | expense, or `{ id }` |
 | `addSettlement` / `deleteSettlement` | settlement, or `{ id }` |
 | `addProject` / `updateProject` / `deleteProject` | project, or `{ id }` |
@@ -552,6 +554,16 @@ model.
 
 The AI actions run outside the script lock, because they take seconds and touch
 no rows.
+
+**One request per sync.** The app sends its whole queue with `sync` and gets the
+fresh copy back in the same response, so ten changes made offline cost one round
+trip, not eleven. Every write moves the Sheet's revision on (typing in the Sheet
+does too). A phone that already holds the current revision is told so and keeps
+its copy. Everyone still gets a full copy on the first sync of each day, which is
+when rates refresh and recurring items fall due, and **More → Sync now** always
+fetches one. Rows deleted by hand in the Sheet don't move the revision; use
+**Sync now** after that. Against a backend older than this, the app falls back
+to one request per change.
 
 ## Troubleshooting
 
