@@ -46,7 +46,7 @@ await t('delete, then Undo, brings the expense back', async () => {
 await t('a deleted project is listed once and restored whole', async () => {
   await A.evaluate(() => { S.projects = S.projects.filter(x => x.id !== 'p_side'); enqueue('deleteProject', { id: 'p_side' }); });
   await A.settle(); await A.evaluate(() => sync()); await A.settle();
-  await A.click('nav [data-go="more"]');
+  await A.click('nav [data-go="history"]'); await A.click('[data-hview="activity"]');
   assert.match(await A.evaluate(() => document.querySelector('#deletedBox').innerText.replace(/\s+/g, ' ')), /Project "Day trip" and 2 items in it/);
   await A.click('[data-restore="project|p_side"]'); await A.settle();
   const b = boot();
@@ -86,8 +86,12 @@ await t('needs attention: lists what is wrong, and its buttons fix it', async ()
   await A.evaluate(() => sync()); await A.settle(); await A.click('nav [data-go="home"]');
   const kinds = () => A.evaluate(() => attentionList().map(x => x.kind));
   assert.deepEqual(await kinds(), ['disputed', 'dup', 'nocat']);
-  await A.click('#attnCard [data-attnoff^="dup:"]');
+  assert.match(await A.textContent('#attnAll'), /3 to check/);
+  await A.click('#attnAll');                                           // the full list, where an item can be dismissed
+  await A.click('#attnBody [data-attnoff^="dup:"]');
+  await A.click('#attnSheet [data-close="attnSheet"]');
   await A.click('#attnCard [data-attn="nocat:e_taxi"]'); await A.waitForSelector('#exSheet.on');
+  assert.equal(await A.textContent('#fv-cat'), 'Not set');
   await A.click('[data-cat="transport"]'); await A.click('#exSave'); await A.settle();
   assert.deepEqual(await kinds(), ['disputed']);
   assert.equal(boot().expenses.find(e => e.id === 'e_taxi').category, 'transport');
