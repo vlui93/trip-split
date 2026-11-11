@@ -99,6 +99,7 @@ await t('card-app screenshots: overlap counted once, dark mode read, an existing
 
 await t('the Excel export downloads as one .xlsx holding the filtered rows', async () => {
   await p.click('nav [data-go="history"]');
+  await p.click('#fDatesBtn');
   await p.fill('#fFrom', '2026-10-01'); await p.dispatchEvent('#fFrom', 'change');
   await p.fill('#fTo', '2026-10-10'); await p.dispatchEvent('#fTo', 'change');
   assert.match(await p.textContent('#histCount'), /^1 · A\$88\.00$/);

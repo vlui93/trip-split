@@ -3,9 +3,10 @@
 <head>
 <meta charset="utf-8">
 <title>Trip Split</title>
-<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, maximum-scale=1, user-scalable=no">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="description" content="A local-first bill splitter for trips and shared households.">
-<meta name="theme-color" content="#0f172a">
+<meta name="theme-color" content="#f2f3f7" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#0b1020" media="(prefers-color-scheme: dark)">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
@@ -19,26 +20,53 @@
 <link rel="manifest" href="manifest.webmanifest">
 <style>
 :root{
-  --bg:#f4f5f7; --surface:#ffffff; --surface-2:#eceef2; --line:#dcdfe6;
+  --bg:#f2f3f7; --surface:#ffffff; --surface-2:#eceef3; --line:#e1e4ea;
   --text:#101828; --muted:#667085; --faint:#98a2b3;
-  --accent:#2563eb; --accent-ink:#ffffff; --accent-soft:#e3ecfe;
+  /* The accent follows the project: JS sets --accent-l and --accent-d. */
+  --accent-l:#2563eb; --accent-d:#5b8cff;
+  --accent:var(--accent-l); --accent-ink:#ffffff;
+  --accent-soft:color-mix(in srgb,var(--accent) 13%,var(--surface));
   --pos:#047857; --pos-soft:#d9f2e8;
   --neg:#be123c; --neg-soft:#fde7ec;
   --warn:#b45309; --warn-soft:#fdf0d5;
-  --r:14px; --tap:52px;
+  --r:22px; --r-ctl:16px; --tap:52px;
   --safe-t:env(safe-area-inset-top,0px);
   --safe-b:env(safe-area-inset-bottom,0px);
-  --nav-h:calc(62px + var(--safe-b));
+  --nav-h:calc(90px + var(--safe-b));
+  /* Glass is for controls that float over content, never for the content itself. */
+  --glass:color-mix(in srgb,var(--surface) 64%,transparent);
+  --glass-rim:rgba(255,255,255,.75);
+  --glass-edge:rgba(15,23,42,.09);
+  --glass-shadow:0 10px 30px -12px rgba(15,23,42,.30),0 2px 6px -2px rgba(15,23,42,.10);
+  --spring:cubic-bezier(.3,1.45,.5,1);
 }
 @media (prefers-color-scheme:dark){
   :root{
-    --bg:#0b1020; --surface:#151b2e; --surface-2:#1e2540; --line:#2a3350;
+    --bg:#0b1020; --surface:#151b2e; --surface-2:#1e2540; --line:#273050;
     --text:#eef2ff; --muted:#9aa5c4; --faint:#6b769a;
-    --accent:#5b8cff; --accent-ink:#06102a; --accent-soft:#1c2a52;
+    --accent:var(--accent-d); --accent-ink:#06102a;
     --pos:#34d399; --pos-soft:#0f3b30;
     --neg:#fb7185; --neg-soft:#43162a;
     --warn:#fbbf24; --warn-soft:#3d2f10;
+    --glass:color-mix(in srgb,#1d2540 58%,transparent);
+    --glass-rim:rgba(255,255,255,.13);
+    --glass-edge:rgba(0,0,0,.45);
+    --glass-shadow:0 12px 32px -12px rgba(0,0,0,.7),0 2px 6px -2px rgba(0,0,0,.4);
   }
+}
+.glass{
+  background:var(--glass);
+  -webkit-backdrop-filter:blur(22px) saturate(190%);backdrop-filter:blur(22px) saturate(190%);
+  border:1px solid var(--glass-edge);
+  box-shadow:inset 0 1px 0 var(--glass-rim),inset 0 0 0 .5px var(--glass-rim),var(--glass-shadow);
+}
+/* Reduce Transparency, or a browser without blur: solid, same shape. */
+@media (prefers-reduced-transparency:reduce){
+  :root{--glass:var(--surface)}
+  .glass,.topbar.stuck,.sheet-head{-webkit-backdrop-filter:none!important;backdrop-filter:none!important}
+}
+@supports not ((backdrop-filter:blur(1px)) or (-webkit-backdrop-filter:blur(1px))){
+  :root{--glass:var(--surface)}
 }
 *{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
 /* Text selection and the long-press callout are the two biggest tells that a
@@ -46,6 +74,13 @@
 body{-webkit-user-select:none;user-select:none;-webkit-touch-callout:none}
 input,textarea,select{-webkit-user-select:text;user-select:text}
 html,body{margin:0;padding:0}
+/* A soft wash of the project's colour behind everything, for the glass to pick up. */
+body::before{content:"";position:fixed;inset:0;z-index:-1;pointer-events:none;
+  background:
+    radial-gradient(130% 46% at 50% -8%,color-mix(in srgb,var(--accent) 20%,transparent) 0%,transparent 70%),
+    radial-gradient(90% 40% at 100% 104%,color-mix(in srgb,var(--accent) 11%,transparent) 0%,transparent 70%),
+    var(--bg)}
+svg.i{width:1.15em;height:1.15em;flex:none;stroke:currentColor;fill:none;stroke-width:1.9;stroke-linecap:round;stroke-linejoin:round;vertical-align:-.2em}
 body{
   background:var(--bg); color:var(--text);
   font:16px/1.45 -apple-system,BlinkMacSystemFont,"SF Pro Text","Segoe UI",Roboto,sans-serif;
@@ -67,14 +102,17 @@ button{border:0;background:none;cursor:pointer}
   .screen.on,.sheet .panel,.toast{animation:none!important;transition:none!important}
 }
 .topbar{
-  position:sticky;top:0;z-index:20;background:var(--bg);
+  position:sticky;top:0;z-index:20;background:transparent;transition:background .2s;
   padding:calc(var(--safe-t) + 14px) 0 10px;margin:0 -16px 4px;
   padding-left:16px;padding-right:16px;
   display:flex;align-items:center;gap:10px;
   border-bottom:1px solid transparent;
 }
-.topbar.stuck{border-bottom-color:var(--line)}
-.topbar h1{font-size:26px;flex:1}
+.topbar.stuck{background:var(--glass);-webkit-backdrop-filter:blur(22px) saturate(190%);backdrop-filter:blur(22px) saturate(190%);
+  border-bottom-color:var(--glass-edge);box-shadow:inset 0 -1px 0 var(--glass-rim)}
+.topbar h1{font-size:28px;flex:1;letter-spacing:-.02em;transition:font-size .2s}
+.topbar.stuck h1{font-size:19px}
+svg.pchev{width:.62em;height:.62em;opacity:.5;margin-left:6px;stroke-width:2.6;vertical-align:.02em}
 .sub{color:var(--muted);font-size:13px;margin:2px 0 14px}
 
 .card{background:var(--surface);border:1px solid var(--line);border-radius:var(--r);padding:14px;margin-bottom:12px;
@@ -84,6 +122,48 @@ button{border:0;background:none;cursor:pointer}
   border-color:transparent;color:#fff;box-shadow:0 10px 24px -12px color-mix(in srgb,var(--accent) 70%,transparent)}
 .card.hero .section-label,.card.hero h3{color:rgba(255,255,255,.72)}
 .card.hero .tag{background:rgba(255,255,255,.18);color:#fff}
+.hero{border-radius:28px;padding:20px 20px 18px;margin-bottom:12px;color:#fff;position:relative;overflow:hidden;
+  background:linear-gradient(155deg,var(--accent-l) 0%,color-mix(in srgb,var(--accent-l) 66%,#0b1020) 100%);
+  box-shadow:inset 0 1px 0 rgba(255,255,255,.35),0 16px 32px -18px color-mix(in srgb,var(--accent-l) 80%,transparent)}
+.hero::after{content:"";position:absolute;inset:0;pointer-events:none;
+  background:radial-gradient(120% 80% at 100% 0%,rgba(255,255,255,.22) 0%,transparent 55%)}
+.hero>*{position:relative;z-index:1}
+.hero .lbl{font-size:14px;font-weight:650;opacity:.82}
+.hero .num{font-size:46px;line-height:1.05;font-weight:750;letter-spacing:-.035em;margin:2px 0 8px}
+.hero .num.sm{font-size:34px}
+.hero .line{font-size:14.5px;font-weight:600;opacity:.92;display:flex;gap:8px;align-items:center;padding:2px 0}
+.hero .foot{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-top:14px}
+.hero .foot small{font-size:12.5px;opacity:.8;font-weight:600}
+.hero .hbtn{min-height:40px;padding:0 16px;border-radius:999px;font-weight:650;font-size:14px;color:#fff;white-space:nowrap;
+  background:rgba(255,255,255,.2);border:1px solid rgba(255,255,255,.3);box-shadow:inset 0 1px 0 rgba(255,255,255,.35);
+  -webkit-backdrop-filter:blur(10px);backdrop-filter:blur(10px);transition:transform .18s var(--spring)}
+.hero .hbtn:active{transform:scale(.94)}
+.swatch{width:40px;height:40px;border-radius:50%;background:var(--sw-l);border:3px solid var(--surface);box-shadow:0 0 0 1px var(--line);transition:transform .18s var(--spring)}
+@media (prefers-color-scheme:dark){.swatch{background:var(--sw-d)}}
+.swatch.on{box-shadow:0 0 0 2.5px var(--text);transform:scale(1.06)}
+/* History's filters: a search field and one row of dropdown pills. */
+.fsearch{display:flex;align-items:center;gap:8px;min-height:46px;padding:0 14px;margin:12px 0 10px;border-radius:999px;
+  background:var(--surface);border:1px solid var(--line);color:var(--muted)}
+.fsearch:focus-within{border-color:var(--accent);box-shadow:0 0 0 3px var(--accent-soft)}
+.fsearch input{flex:1;min-width:0;min-height:44px;padding:0;border:0;background:transparent;box-shadow:none !important;color:var(--text);
+  appearance:none;-webkit-appearance:none;outline:none}
+.fsearch input::-webkit-search-cancel-button{-webkit-appearance:none}
+.fpill{position:relative;flex:none;min-height:40px;padding:0 12px 0 14px;border-radius:999px;display:inline-flex;align-items:center;gap:5px;
+  font-size:14px;font-weight:650;background:var(--surface);border:1px solid var(--line);color:var(--text);transition:transform .18s var(--spring)}
+.fpill:active{transform:scale(.95)}
+.fpill.on{background:var(--accent);color:var(--accent-ink);border-color:transparent}
+.fpill svg.i{opacity:.6;width:1em;height:1em}
+.fpill select{position:absolute;inset:0;width:100%;height:100%;min-height:0;opacity:0;padding:0;border:0;font-size:16px}
+/* Needs attention: a row of pills that scrolls sideways. */
+.pills{display:flex;gap:8px;overflow-x:auto;margin:0 -16px 12px;padding:2px 16px;scrollbar-width:none;-webkit-overflow-scrolling:touch}
+.pills::-webkit-scrollbar{display:none}
+.pill{flex:none;min-height:40px;max-width:68vw;padding:0 14px;border-radius:999px;display:inline-flex;align-items:center;gap:7px;
+  font-size:13.5px;font-weight:650;background:var(--warn-soft);color:var(--warn);border:1px solid color-mix(in srgb,var(--warn) 22%,transparent);
+  transition:transform .18s var(--spring)}
+.pill:active{transform:scale(.95)}
+.pill.count{background:var(--warn);color:#fff;border-color:transparent}
+@media (prefers-color-scheme:dark){.pill.count{color:#201400}}
+.pill span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .press{transition:transform .1s ease,opacity .1s ease}
 .press:active{transform:scale(.985);opacity:.9}
 .card.tight{padding:10px 14px}
@@ -97,41 +177,61 @@ button{border:0;background:none;cursor:pointer}
 
 /* ---------- controls ---------- */
 .btn{
-  min-height:var(--tap);padding:0 18px;border-radius:12px;
+  min-height:var(--tap);padding:0 20px;border-radius:999px;
   background:var(--surface-2);color:var(--text);font-weight:600;
   display:inline-flex;align-items:center;justify-content:center;gap:8px;
   border:1px solid var(--line);transition:transform .08s;
 }
-.btn:active{transform:scale(.975)}
+.btn{transition:transform .18s var(--spring)}
+.btn:active{transform:scale(.96)}
 .btn.primary{background:var(--accent);color:var(--accent-ink);border-color:transparent}
 .btn.danger{background:var(--neg-soft);color:var(--neg);border-color:transparent}
 .btn.ghost{background:transparent;border-color:var(--line)}
 .btn.full{width:100%}
-.btn.sm{min-height:40px;padding:0 14px;font-size:14px;border-radius:10px}
+.btn.sm{min-height:40px;padding:0 16px;font-size:14px}
+.btn.sm:not(.full){white-space:nowrap}
 .btn[disabled]{opacity:.45;pointer-events:none}
-.iconbtn{width:42px;height:42px;border-radius:11px;background:var(--surface-2);display:grid;place-items:center;font-size:18px;border:1px solid var(--line)}
+.iconbtn{width:42px;height:42px;border-radius:50%;display:grid;place-items:center;font-size:18px;flex:none;
+  background:var(--glass);-webkit-backdrop-filter:blur(22px) saturate(190%);backdrop-filter:blur(22px) saturate(190%);
+  border:1px solid var(--glass-edge);box-shadow:inset 0 1px 0 var(--glass-rim),0 2px 8px -4px rgba(15,23,42,.25);
+  transition:transform .18s var(--spring)}
+.iconbtn:active{transform:scale(.9)}
 
 label.fl{display:block;font-size:12px;font-weight:700;letter-spacing:.04em;text-transform:uppercase;color:var(--faint);margin-bottom:6px}
 input[type=text],input[type=number],input[type=date],select,textarea{
-  width:100%;min-height:var(--tap);padding:12px 14px;border-radius:12px;
+  width:100%;min-height:var(--tap);padding:12px 14px;border-radius:var(--r-ctl);
   background:var(--surface);border:1px solid var(--line);outline:none;
   appearance:none;-webkit-appearance:none;
 }
 input:focus,select:focus,textarea:focus{border-color:var(--accent);box-shadow:0 0 0 3px var(--accent-soft)}
 select{background-image:linear-gradient(45deg,transparent 50%,var(--muted) 50%),linear-gradient(135deg,var(--muted) 50%,transparent 50%);background-position:calc(100% - 20px) 22px,calc(100% - 15px) 22px;background-size:5px 5px,5px 5px;background-repeat:no-repeat}
-.amount-in{font-size:34px !important;font-weight:700;letter-spacing:-.02em;padding:14px !important;text-align:right}
+.amt-block{text-align:center;padding:4px 0 14px}
+.amt-cur{display:block;font-size:12px;font-weight:700;letter-spacing:.08em;color:var(--faint);margin-top:12px}
+.amount-in{font-size:54px !important;line-height:1.1;font-weight:750;letter-spacing:-.035em;padding:0 8px !important;text-align:center;
+  background:transparent !important;border:0 !important;box-shadow:none !important;min-height:68px !important;font-variant-numeric:tabular-nums}
+.amount-in::placeholder{color:var(--faint);opacity:.6}
+/* One line per choice; tap a line to change it. */
+.frows{padding:0 14px}
+.frow+.frow{border-top:1px solid var(--line)}
+.frow-head{display:flex;align-items:center;gap:10px;width:100%;min-height:54px;text-align:left}
+.frow-head .k{color:var(--muted);font-size:15px;flex:none}
+.frow-head .v{flex:1;min-width:0;text-align:right;font-weight:650;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.frow-head svg.i{color:var(--faint);transition:transform .25s var(--spring)}
+.frow.open .frow-head svg.i{transform:rotate(180deg)}
+.frow-body{display:none;padding:2px 0 14px}
+.frow.open .frow-body{display:block;animation:fade .2s}
 
 .chips{display:flex;flex-wrap:wrap;gap:8px}
 .chip{
-  min-height:46px;padding:0 15px;border-radius:12px;border:1px solid var(--line);
+  min-height:44px;padding:0 16px;border-radius:999px;border:1px solid var(--line);
   background:var(--surface);font-weight:600;font-size:15px;
-  display:inline-flex;align-items:center;gap:6px;transition:transform .08s;
+  display:inline-flex;align-items:center;gap:6px;transition:transform .18s var(--spring);
 }
 .chip:active{transform:scale(.96)}
 .chip.on{background:var(--accent);color:var(--accent-ink);border-color:transparent}
 .chip small{opacity:.7;font-weight:600;font-size:11px}
-.seg{display:grid;grid-template-columns:repeat(4,1fr);gap:6px;background:var(--surface-2);padding:5px;border-radius:14px;border:1px solid var(--line)}
-.seg button{min-height:44px;border-radius:10px;font-size:13.5px;font-weight:650;color:var(--muted)}
+.seg{display:grid;grid-template-columns:repeat(4,1fr);gap:6px;background:var(--surface-2);padding:5px;border-radius:999px;border:1px solid var(--line)}
+.seg button{min-height:44px;border-radius:999px;font-size:13.5px;font-weight:650;color:var(--muted)}
 .seg button.on{background:var(--surface);color:var(--text);box-shadow:0 1px 3px rgba(0,0,0,.12)}
 
 /* ---------- balances ---------- */
@@ -148,7 +248,9 @@ select{background-image:linear-gradient(45deg,transparent 50%,var(--muted) 50%),
 /* ---------- expense list ---------- */
 .ex{display:flex;gap:12px;padding:12px 0;width:100%;text-align:left;align-items:center}
 .ex+.ex{border-top:1px solid var(--line)}
-.ex .ic{width:40px;height:40px;border-radius:11px;background:var(--surface-2);display:grid;place-items:center;font-size:17px;flex:none}
+.ex .ic{width:40px;height:40px;border-radius:13px;background:var(--surface-2);color:var(--muted);display:grid;place-items:center;font-size:13px;font-weight:700;flex:none}
+.ex .ic svg.i{width:20px;height:20px}
+.ex .ic.cat{background:var(--accent-soft);color:var(--accent)}
 .ex .t1{font-weight:620;font-size:15.5px}
 .ex .t2{font-size:12.5px;color:var(--muted);margin-top:2px}
 .ex .r1{font-weight:700;font-size:15.5px;text-align:right}
@@ -164,8 +266,8 @@ select{background-image:linear-gradient(45deg,transparent 50%,var(--muted) 50%),
 /* Breakdown: categorical slots from the validated palette, light and dark. */
 :root{--c1:#2a78d6;--c2:#eb6834;--c3:#1baf7a;--c4:#eda100;--c5:#e87ba4;--c6:#008300;--c7:#6250d6;--c-rest:#b4b3ac}
 @media (prefers-color-scheme:dark){:root{--c1:#3987e5;--c2:#d95926;--c3:#199e70;--c4:#c98500;--c5:#d55181;--c6:#008300;--c7:#9085e9;--c-rest:#4a5170}}
-.seg{display:grid;grid-template-columns:repeat(2,1fr);gap:4px;padding:4px;background:var(--surface-2);border-radius:12px;margin:4px 0 6px}
-.seg button{width:100%;justify-content:center;text-align:center;padding:8px 0;border-radius:9px;font-weight:650;font-size:14px;color:var(--muted)}
+.seg{display:grid;grid-template-columns:repeat(2,1fr);gap:4px;padding:4px;background:var(--surface-2);border-radius:999px;margin:4px 0 6px}
+.seg button{width:100%;justify-content:center;text-align:center;padding:8px 0;border-radius:999px;font-weight:650;font-size:14px;color:var(--muted)}
 .seg button.on{background:var(--surface);color:var(--text);box-shadow:0 1px 2px rgba(0,0,0,.08)}
 .donut{display:block;margin:6px auto 4px;width:200px;height:200px}
 .donut path{transition:opacity .15s;cursor:pointer}
@@ -177,28 +279,30 @@ select{background-image:linear-gradient(45deg,transparent 50%,var(--muted) 50%),
 .bd-row .bar i{display:block;height:100%;border-radius:3px}
 .bd-row.dim{opacity:.45}
 .empty{text-align:center;color:var(--muted);padding:38px 18px;font-size:14.5px;line-height:1.5}
-.empty .big{display:block;font-size:30px;margin-bottom:10px;opacity:.45}
+.empty .big{display:block;font-size:34px;margin-bottom:8px;opacity:.4}
 
-/* ---------- bottom nav ---------- */
-.nav{
-  position:fixed;left:0;right:0;bottom:0;z-index:40;height:var(--nav-h);
-  padding-bottom:var(--safe-b);
-  background:color-mix(in srgb,var(--surface) 88%,transparent);
-  backdrop-filter:saturate(180%) blur(18px);-webkit-backdrop-filter:saturate(180%) blur(18px);
-  border-top:1px solid var(--line);
-  display:grid;grid-template-columns:repeat(5,1fr);align-items:center;
-}
-.nav button{height:58px;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:3px;color:var(--faint);font-size:10px;font-weight:650;letter-spacing:.01em;transition:color .16s}
-.nav button svg{width:24px;height:24px;stroke:currentColor;fill:none;stroke-width:1.9;stroke-linecap:round;stroke-linejoin:round;transition:transform .18s cubic-bezier(.3,1.4,.5,1)}
-.nav button.on{color:var(--accent)}
-.nav button.on svg{transform:translateY(-1px) scale(1.06)}
-.nav button:active svg{transform:scale(.9)}
-.nav .fab{position:relative}
-.nav .fab .disc{width:52px;height:52px;border-radius:17px;background:var(--accent);color:var(--accent-ink);display:grid;place-items:center;
-  box-shadow:0 6px 18px -4px color-mix(in srgb,var(--accent) 60%,transparent);margin-top:-14px;
-  transition:transform .14s cubic-bezier(.3,1.5,.5,1)}
-.nav .fab:active .disc{transform:scale(.9)}
-.nav .fab .disc svg{stroke:currentColor;fill:none;stroke-linecap:round}
+/* ---------- bottom nav: a glass capsule and a separate + ---------- */
+.nav{position:fixed;left:14px;right:14px;bottom:calc(var(--safe-b) + 10px);z-index:40;
+  display:flex;align-items:center;gap:10px;pointer-events:none}
+.nav .tabs{flex:1;height:64px;border-radius:32px;padding:5px;pointer-events:auto;
+  display:grid;grid-template-columns:repeat(4,1fr);transition:height .28s var(--spring)}
+.nav .tabs button{height:100%;border-radius:27px;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:2px;
+  color:var(--muted);font-size:10px;font-weight:650;letter-spacing:.01em;transition:color .16s,background .2s,font-size .2s}
+.nav button svg{width:23px;height:23px;stroke:currentColor;fill:none;stroke-width:1.9;stroke-linecap:round;stroke-linejoin:round;transition:transform .2s var(--spring)}
+.nav .tabs button.on{color:var(--accent);background:color-mix(in srgb,var(--accent) 13%,transparent)}
+.nav .tabs button:active svg{transform:scale(.88)}
+.nav .fab{width:64px;height:64px;border-radius:50%;flex:none;pointer-events:auto;display:grid;place-items:center;
+  color:var(--accent-ink);background:color-mix(in srgb,var(--accent) 86%,transparent);
+  border-color:color-mix(in srgb,var(--accent) 60%,#000);
+  box-shadow:inset 0 1px 0 rgba(255,255,255,.45),inset 0 0 0 .5px rgba(255,255,255,.3),0 10px 24px -8px color-mix(in srgb,var(--accent) 70%,transparent);
+  transition:transform .22s var(--spring),width .28s var(--spring),height .28s var(--spring)}
+.nav .fab:active{transform:scale(.9)}
+.nav .fab svg{width:26px;height:26px;stroke-width:2.3}
+/* Scrolling down tucks the bar in; scrolling up brings it back. */
+body.setup .nav{display:none}
+body.nav-min .nav .tabs{height:50px}
+body.nav-min .nav .tabs button{font-size:0;gap:0}
+body.nav-min .nav .fab{width:50px;height:50px}
 
 /* ---------- sheet ---------- */
 .sheet{position:fixed;inset:0;z-index:60;display:none}
@@ -211,8 +315,9 @@ select{background-image:linear-gradient(45deg,transparent 50%,var(--muted) 50%),
 .sheet .panel{
   position:absolute;left:0;right:0;bottom:0;max-height:94vh;overflow-y:auto;
   -webkit-overflow-scrolling:touch;
-  background:var(--bg);border-radius:20px 20px 0 0;
+  background:var(--bg);border-radius:30px 30px 0 0;
   padding:8px 16px calc(24px + var(--safe-b));
+  box-shadow:0 -1px 0 var(--glass-rim),0 -14px 40px -16px rgba(0,0,0,.35);
   animation:up .3s cubic-bezier(.22,.9,.28,1);
   will-change:transform;
 }
@@ -221,17 +326,18 @@ select{background-image:linear-gradient(45deg,transparent 50%,var(--muted) 50%),
 .grab{touch-action:none}
 @keyframes up{from{transform:translateY(100%)}to{transform:none}}
 .grab{width:38px;height:4px;border-radius:99px;background:var(--line);margin:6px auto 10px}
-.sheet-head{position:sticky;top:0;background:var(--bg);z-index:2;display:flex;align-items:center;gap:10px;padding:4px 0 12px}
+.sheet-head{position:sticky;top:0;z-index:2;display:flex;align-items:center;gap:10px;padding:6px 16px 12px;margin:0 -16px;
+  background:color-mix(in srgb,var(--bg) 72%,transparent);-webkit-backdrop-filter:blur(18px) saturate(180%);backdrop-filter:blur(18px) saturate(180%)}
 .sheet-head h2{font-size:19px;flex:1}
 
 /* ---------- misc ---------- */
-.banner{border-radius:12px;padding:11px 13px;font-size:13.5px;margin-bottom:12px;display:flex;gap:9px;align-items:flex-start}
+.banner{border-radius:18px;padding:11px 13px;font-size:13.5px;margin-bottom:12px;display:flex;gap:9px;align-items:flex-start}
 .banner.warn{background:var(--warn-soft);color:var(--warn)}
 .banner.bad{background:var(--neg-soft);color:var(--neg)}
 .banner.ok{background:var(--pos-soft);color:var(--pos)}
 .xfer.flash{background:var(--accent-soft);border-radius:12px;transition:background .3s}
 .toast-undo{float:right;margin-left:12px;font-weight:750;color:inherit;text-decoration:underline;text-underline-offset:3px}
-.toast{position:fixed;left:16px;right:16px;bottom:calc(var(--nav-h) + 12px);z-index:90;background:var(--text);color:var(--bg);padding:13px 15px;border-radius:13px;font-size:14px;font-weight:600;box-shadow:0 10px 30px -8px rgba(0,0,0,.5);opacity:0;visibility:hidden;transform:translateY(24px) scale(.96);transition:opacity .2s,transform .26s cubic-bezier(.2,.8,.25,1),visibility .26s}
+.toast{position:fixed;left:16px;right:16px;bottom:calc(var(--nav-h) + 12px);z-index:90;background:var(--text);color:var(--bg);padding:13px 15px;border-radius:26px;font-size:14px;font-weight:600;box-shadow:0 10px 30px -8px rgba(0,0,0,.5);opacity:0;visibility:hidden;transform:translateY(24px) scale(.96);transition:opacity .2s,transform .26s cubic-bezier(.2,.8,.25,1),visibility .26s}
 .toast.on{opacity:1;visibility:visible;transform:none}
 .dot{width:8px;height:8px;border-radius:50%;background:var(--faint);flex:none}
 .dot.ok{background:var(--pos)} .dot.pend{background:var(--warn)} .dot.bad{background:var(--neg)}
@@ -242,8 +348,8 @@ select{background-image:linear-gradient(45deg,transparent 50%,var(--muted) 50%),
 .ratebox .btn{white-space:nowrap}
 .linkbtn{color:var(--accent);font-weight:650;font-size:13.5px;padding:2px 0;text-align:left}
 body.guest .owner-only{display:none !important}
-.aibar{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:12px}
-.aibar button{min-height:50px;border-radius:12px;background:var(--accent-soft);color:var(--accent);font-weight:650;font-size:14.5px;display:flex;align-items:center;justify-content:center;gap:7px;border:1px solid transparent}
+.aibar{display:grid;grid-template-columns:repeat(auto-fit,minmax(0,1fr));gap:8px;margin-bottom:8px}
+.aibar button{min-height:44px;border-radius:999px;background:var(--accent-soft);color:var(--accent);font-weight:650;font-size:14.5px;display:flex;align-items:center;justify-content:center;gap:7px;border:1px solid transparent}
 .aibar button:active{transform:scale(.975)}
 .busy{position:fixed;inset:0;z-index:80;display:none;place-items:center;background:color-mix(in srgb,var(--bg) 82%,transparent);backdrop-filter:blur(6px);-webkit-backdrop-filter:blur(6px)}
 .busy.on{display:grid}
@@ -286,31 +392,22 @@ body.guest .owner-only{display:none !important}
 <section id="s-home" class="screen">
   <div class="topbar">
     <button class="grow" id="projBtn" style="text-align:left;padding:0">
-      <h1 id="projName">Trip Split<span style="font-size:15px;opacity:.5;margin-left:6px">⌄</span></h1>
+      <h1 id="projName">Trip Split</h1>
       <div id="projMeta" style="font-size:12.5px;color:var(--muted);margin-top:1px"></div>
     </button>
-    <button class="iconbtn" id="syncBtn" title="Sync"><span id="syncIcon">⟳</span></button>
+    <button class="iconbtn" id="syncBtn" title="Sync" aria-label="Sync"><span id="syncIcon" style="display:grid"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M20 11a8 8 0 0 0-14.3-4.2L4 8.5"/><path d="M4 4.5v4h4"/><path d="M4 13a8 8 0 0 0 14.3 4.2L20 15.5"/><path d="M20 19.5v-4h-4"/></svg></span></button>
   </div>
 
   <div id="syncBanner"></div>
+  <div id="heroCard"></div>
   <div id="attnCard"></div>
 
   <div class="card">
     <div class="row between" style="margin-bottom:4px">
-      <h3 style="font-size:15px">Net balance</h3>
+      <h3 style="font-size:15px" id="balTitle">Everyone</h3>
       <span class="tag mono" id="tripTotal">—</span>
     </div>
     <div id="balances"></div>
-  </div>
-
-  <div class="card tight">
-    <div class="row between">
-      <div>
-        <div style="font-size:13px;color:var(--muted)">Simplest way to settle</div>
-        <div id="settleHint" style="font-weight:650;margin-top:2px">Everyone is square</div>
-      </div>
-      <button class="btn sm ghost" data-go="settle">Settle up</button>
-    </div>
   </div>
 
   <div id="recurCard" class="owner-only"></div>
@@ -322,8 +419,9 @@ body.guest .owner-only{display:none !important}
 
 <!-- ============ HISTORY ============ -->
 <section id="s-history" class="screen">
-  <div class="topbar"><h1 class="grow">History</h1><span class="tag mono" id="histCount">0</span></div>
-  <div class="seg" id="histView"><button data-hview="list">List</button><button data-hview="breakdown">Breakdown</button></div>
+  <div class="topbar"><h1 class="grow">History</h1><span class="tag mono" id="histCount">0</span>
+    <button class="iconbtn" id="xlsxBtn" title="Download Excel of these results" aria-label="Download Excel of these results"><i data-ic="download"></i></button></div>
+  <div class="seg" id="histView"><button data-hview="list">List</button><button data-hview="breakdown">Breakdown</button><button data-hview="activity" class="owner-only">Activity</button></div>
   <div id="bdWrap" style="display:none">
     <div class="section-label" style="margin-top:12px">Split by</div>
     <div class="chips" id="bdBy"></div>
@@ -334,23 +432,24 @@ body.guest .owner-only{display:none !important}
     <div class="card" id="bdChart" style="margin-top:12px"></div>
   </div>
   <div id="listWrap">
-  <div class="section-label" style="margin-top:4px">City</div>
-  <div class="chips" id="fCity"></div>
-  <div class="section-label">Person involved</div>
-  <div class="chips" id="fPerson"></div>
-  <div class="section-label">Category</div>
-  <div class="chips" id="fCat"></div>
-  <div class="section-label">Dates</div>
-  <div class="row" style="gap:8px">
-    <input type="date" id="fFrom" class="grow" aria-label="From" style="min-width:0">
-    <span style="color:var(--muted);font-size:14px">to</span>
-    <input type="date" id="fTo" class="grow" aria-label="To" style="min-width:0">
-    <button class="iconbtn" id="fDatesClear" title="Clear dates" style="display:none">×</button>
+    <label class="fsearch"><i data-ic="search"></i>
+      <input id="fSearch" type="search" placeholder="Search what, where, who or how much" autocapitalize="off" autocorrect="off" spellcheck="false" aria-label="Search expenses"></label>
+    <div class="pills" id="fPills"></div>
+    <div class="row" id="fDates" style="gap:8px;display:none;margin-bottom:12px">
+      <input type="date" id="fFrom" class="grow" aria-label="From" style="min-width:0">
+      <span style="color:var(--muted);font-size:14px">to</span>
+      <input type="date" id="fTo" class="grow" aria-label="To" style="min-width:0">
+    </div>
+    <div class="label-row"><div class="section-label" style="margin-top:6px">Results</div>
+      <button class="linkbtn" data-foldall="hist" id="histFoldAll" style="display:none"></button></div>
+    <div id="histList"></div>
   </div>
-  <button class="btn ghost full sm" id="xlsxBtn" style="margin-top:14px">⬇ Download Excel of these results</button>
-  <div class="label-row"><div class="section-label">Results</div>
-    <button class="linkbtn" data-foldall="hist" id="histFoldAll" style="display:none"></button></div>
-  <div id="histList"></div>
+  <div id="actWrap" class="owner-only" style="display:none">
+    <div class="section-label" style="margin-top:12px">Recently deleted</div>
+    <div class="card" id="deletedBox"></div>
+    <div class="section-label">Recent changes</div>
+    <div class="card" id="changesBox"></div>
+    <p class="sub">Every change is also recorded in the Sheet's Changes tab, with what it was before and after — so a deleted expense can be found again.</p>
   </div>
 </section>
 
@@ -359,7 +458,7 @@ body.guest .owner-only{display:none !important}
   <div class="topbar"><h1>Settle up</h1></div>
   <p class="sub">The fewest transactions that clear every balance. Debts are chained through, so nobody pays a middleman.</p>
   <div class="card" id="transfers"></div>
-  <button class="btn ghost full sm owner-only" id="newRxfer" style="margin-bottom:4px">↻ Set up a recurring transfer</button>
+  <button class="btn ghost full sm owner-only" id="newRxfer" style="margin-bottom:4px"><i data-ic="repeat"></i> Set up a recurring transfer</button>
   <div class="label-row"><div class="section-label">Settlement log</div>
     <button class="linkbtn" data-foldall="settle" id="settleFoldAll" style="display:none"></button></div>
   <div id="settleLog"></div>
@@ -391,12 +490,7 @@ body.guest .owner-only{display:none !important}
     settlements, but can't change people, rates or projects. Turning a link off takes effect on their next sync.
     A full-access link is for the core group: everything, as on the main link, with each change recorded under that person's name.</p>
 
-  <div class="section-label">Recently deleted</div>
-  <div class="card" id="deletedBox"></div>
-
-  <div class="section-label">Recent changes</div>
-  <div class="card" id="changesBox"></div>
-  <p class="sub">Every change is also recorded in the Sheet's Changes tab, with what it was before and after — so a deleted expense can be found again.</p>
+  <button class="btn ghost full sm" id="toActivity" style="margin-top:4px">Recent changes and deleted items</button>
   </div>
 
   <div class="section-label">Connection</div>
@@ -414,16 +508,18 @@ body.guest .owner-only{display:none !important}
 
 <!-- ============ NAV ============ -->
 <nav class="nav">
+  <div class="tabs glass">
   <button data-go="home" class="on" aria-label="Home">
     <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3.2 10.4 12 3.6l8.8 6.8"/><path d="M5.6 9.2V19a1.4 1.4 0 0 0 1.4 1.4h10a1.4 1.4 0 0 0 1.4-1.4V9.2"/><path d="M9.8 20.4v-5.2h4.4v5.2"/></svg>Home</button>
   <button data-go="history" aria-label="History">
     <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 6.5h16"/><path d="M4 12h16"/><path d="M4 17.5h10"/></svg>History</button>
-  <button class="fab" id="addBtn" aria-label="Add expense">
-    <span class="disc"><svg viewBox="0 0 24 24" aria-hidden="true" style="width:25px;height:25px;stroke-width:2.2"><path d="M12 5.5v13M5.5 12h13"/></svg></span></button>
   <button data-go="settle" aria-label="Settle up">
     <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 8.5h13"/><path d="M13.8 5.2 17.2 8.5l-3.4 3.3"/><path d="M20 15.5H7"/><path d="M10.2 12.2 6.8 15.5l3.4 3.3"/></svg>Settle</button>
   <button data-go="more" aria-label="Settings">
     <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 8h14"/><path d="M5 16h14"/><circle cx="9.5" cy="8" r="2.2"/><circle cx="15" cy="16" r="2.2"/></svg>More</button>
+  </div>
+  <button class="fab glass" id="addBtn" aria-label="Add expense">
+    <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5.5v13M5.5 12h13"/></svg></button>
 </nav>
 
 <!-- ============ ADD / EDIT EXPENSE SHEET ============ -->
@@ -437,76 +533,85 @@ body.guest .owner-only{display:none !important}
     </div>
 
     <div class="aibar" id="aiBar" style="display:none">
-      <button id="btnScan">📷 Scan receipt</button>
-      <button id="btnImport">🏦 Statement</button>
-      <button id="btnSay">💬 Describe it</button>
+      <button id="btnScan"><i data-ic="camera"></i> Scan</button>
+      <button id="btnImport"><i data-ic="bank"></i> Statement</button>
+      <button id="btnSay"><i data-ic="chat"></i> Describe</button>
     </div>
     <div id="aiNote"></div>
 
-    <div class="card stack">
-      <div>
-        <label class="fl">City</label>
-        <div class="chips" id="exCity"></div>
-      </div>
-      <div id="exCurWrap">
-        <label class="fl">Currency</label>
-        <div class="chips" id="exCurChips"></div>
-      </div>
+    <div class="amt-block">
+      <div id="exCurWrap"><div class="chips" id="exCurChips" style="justify-content:center"></div></div>
       <button id="exCurMore" class="linkbtn" style="display:none">Paid in another currency?</button>
-      <div>
-        <label class="fl" for="exAmount">Amount · <span id="exCur">HKD</span></label>
-        <input id="exAmount" class="amount-in" type="text" inputmode="decimal" placeholder="0.00">
-        <div class="row between" style="margin-top:6px" id="exAudLine">
-          <span style="font-size:13px;color:var(--muted)" id="exAud">≈ A$0.00</span>
-          <span class="tag" id="exRateTag">—</span>
-        </div>
-        <div class="ratebox" id="exRateBox">
-          <span class="lbl">1 AUD =</span>
-          <input id="exRate" type="text" inputmode="decimal" aria-label="Exchange rate for this expense">
-          <span class="lbl" id="exRateCur">HKD</span>
-        </div>
-        <div class="row between" style="margin-top:6px;align-items:flex-start;gap:10px">
-          <div id="exRateNote" style="font-size:12px;color:var(--muted)" class="grow"></div>
-          <button class="linkbtn" id="exRateReset" style="display:none;white-space:nowrap">Use live</button>
-        </div>
+      <label class="amt-cur" for="exAmount" id="exCur">HKD</label>
+      <input id="exAmount" class="amount-in" type="text" inputmode="decimal" placeholder="0.00" aria-label="Amount">
+      <div class="row" style="justify-content:center;gap:8px;margin-top:2px" id="exAudLine">
+        <span style="font-size:14px;color:var(--muted)" id="exAud">≈ A$0.00</span>
+        <span class="tag" id="exRateTag">—</span>
       </div>
-      <div>
-        <label class="fl" for="exDesc">What for</label>
-        <input id="exDesc" type="text" placeholder="Dinner, taxi, tickets…">
+      <div class="ratebox" id="exRateBox">
+        <span class="lbl">1 AUD =</span>
+        <input id="exRate" type="text" inputmode="decimal" aria-label="Exchange rate for this expense">
+        <span class="lbl" id="exRateCur">HKD</span>
       </div>
-      <div>
-        <label class="fl">Category</label>
-        <div class="chips" id="exCats"></div>
+      <div class="row between" style="margin-top:6px;align-items:flex-start;gap:10px">
+        <div id="exRateNote" style="font-size:12px;color:var(--muted);text-align:left" class="grow"></div>
+        <button class="linkbtn" id="exRateReset" style="display:none;white-space:nowrap">Use live</button>
       </div>
-      <div>
-        <label class="fl">Paid by</label>
-        <div class="chips" id="exPaid"></div>
-      </div>
-      <div>
-        <label class="fl" for="exDate">Date</label>
-        <input id="exDate" type="date">
-      </div>
-      <div id="exRepeatWrap" class="owner-only">
-        <label class="fl">Repeat</label>
-        <div class="chips" id="exRepeat"></div>
-        <div id="exUntilWrap" style="margin-top:10px;display:none">
-          <label class="fl" for="exUntil">Until <span style="text-transform:none;font-weight:500">(optional)</span></label>
-          <input id="exUntil" type="date">
-        </div>
-        <div id="exRepeatNote" style="font-size:12px;color:var(--muted);margin-top:6px"></div>
-      </div>
-      <div id="exSeriesNote" style="display:none"></div>
     </div>
 
-    <div class="section-label">Split</div>
-    <div class="seg" id="exSplitType">
-      <button data-st="equal" class="on">Equal</button>
-      <button data-st="exact">Exact</button>
-      <button data-st="percent">%</button>
-      <button data-st="itemized">Items</button>
-    </div>
+    <input id="exDesc" type="text" placeholder="What was it for? Dinner, taxi, tickets…" aria-label="What for" style="margin-bottom:12px">
 
-    <div class="card" id="exSplitBody" style="margin-top:12px"></div>
+    <div class="card frows">
+      <div class="frow" data-frow="paid">
+        <button class="frow-head" data-frowt="paid"><span class="k">Paid by</span><span class="v" id="fv-paid"></span><i data-ic="chevd"></i></button>
+        <div class="frow-body">
+          <div class="chips" id="exPaid"></div>
+        </div>
+      </div>
+      <div class="frow" data-frow="split">
+        <button class="frow-head" data-frowt="split"><span class="k">Split</span><span class="v" id="fv-split"></span><i data-ic="chevd"></i></button>
+        <div class="frow-body">
+          <div class="seg" id="exSplitType" style="grid-template-columns:repeat(4,1fr);margin-bottom:12px">
+            <button data-st="equal" class="on">Equal</button>
+            <button data-st="exact">Exact</button>
+            <button data-st="percent">%</button>
+            <button data-st="itemized">Items</button>
+          </div>
+          <div id="exSplitBody"></div>
+        </div>
+      </div>
+      <div class="frow" data-frow="cat">
+        <button class="frow-head" data-frowt="cat"><span class="k">Category</span><span class="v" id="fv-cat"></span><i data-ic="chevd"></i></button>
+        <div class="frow-body">
+          <div class="chips" id="exCats"></div>
+        </div>
+      </div>
+      <div class="frow" data-frow="date">
+        <button class="frow-head" data-frowt="date"><span class="k">Date</span><span class="v" id="fv-date"></span><i data-ic="chevd"></i></button>
+        <div class="frow-body">
+          <input id="exDate" type="date" aria-label="Date">
+        </div>
+      </div>
+      <div class="frow" data-frow="city">
+        <button class="frow-head" data-frowt="city"><span class="k">Place</span><span class="v" id="fv-city"></span><i data-ic="chevd"></i></button>
+        <div class="frow-body">
+          <div class="chips" id="exCity"></div>
+        </div>
+      </div>
+      <div class="frow owner-only" data-frow="repeat" id="exRepeatWrap">
+        <button class="frow-head" data-frowt="repeat"><span class="k">Repeat</span><span class="v" id="fv-repeat"></span><i data-ic="chevd"></i></button>
+        <div class="frow-body">
+          <div class="chips" id="exRepeat"></div>
+          <div id="exUntilWrap" style="margin-top:10px;display:none">
+            <label class="fl" for="exUntil">Until <span style="text-transform:none;font-weight:500">(optional)</span></label>
+            <input id="exUntil" type="date">
+          </div>
+          <div id="exRepeatNote" style="font-size:12px;color:var(--muted);margin-top:6px"></div>
+        </div>
+      </div>
+    </div>
+    <div id="exSeriesNote" style="display:none;margin-bottom:12px"></div>
+
     <div class="card tight" id="exPreview"></div>
 
     <button class="btn primary full" id="exSave" style="margin-top:6px">Save expense</button>
@@ -700,6 +805,10 @@ body.guest .owner-only{display:none !important}
         <div class="chips" id="peCur"></div>
       </div>
       <div>
+        <label class="fl">Colour <span style="text-transform:none;font-weight:500">(on this phone)</span></label>
+        <div class="chips" id="peAccent"></div>
+      </div>
+      <div>
         <label class="fl" for="pePlaces">Places <span style="text-transform:none;font-weight:500">(optional, comma separated)</span></label>
         <input id="pePlaces" type="text" placeholder="Tokyo, Kyoto, Osaka">
       </div>
@@ -819,6 +928,64 @@ body.guest .owner-only{display:none !important}
 
 /* Places are free text per project. This is only a hint for picking a currency
    when you tap one, and only among the currencies the project allows. */
+/* ---------------- icons: one set, drawn the same way ---------------- */
+// 24-unit grid, round stroke. A "c:" entry is a circle (cx,cy,r).
+const ICONS = {
+  food:['M4 11h16a8 8 0 0 1-16 0Z','M9 4.2v3','M12 3.2v4','M15 4.2v3'],
+  transport:['M4 11.5h16v5H4z','M6 11.5l1.6-4.3a1.5 1.5 0 0 1 1.4-1h6a1.5 1.5 0 0 1 1.4 1l1.6 4.3','M7 16.5v2','M17 16.5v2'],
+  stay:['M3 18.5V6.5','M3 14.5h18v4','M21 14.5a3.5 3.5 0 0 0-3.5-3.5H11v3.5','c:7,11.2,1.9'],
+  activities:['M4 8a2 2 0 0 1 2-2h12a2 2 0 0 1 2 2v2a2 2 0 0 0 0 4v2a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2v-2a2 2 0 0 0 0-4Z','M14 6.2v1.6','M14 11.2v1.6','M14 16.2v1.6'],
+  shopping:['M6 8.5h12l1 11.5H5L6 8.5Z','M9 8.5V7.3a3 3 0 0 1 6 0v1.2'],
+  groceries:['M3 4.5h2.2l2.3 10.3h10.2L20 7.5H6.3','c:9.2,18.6,1.3','c:16.8,18.6,1.3'],
+  bills:['M13 3 5.5 13.5H12L11 21l7.5-10.5H12L13 3Z'],
+  other:['M4 8l8-4 8 4v8l-8 4-8-4V8Z','M4 8l8 4 8-4','M12 12v8'],
+  sync:['M20 11a8 8 0 0 0-14.3-4.2L4 8.5','M4 4.5v4h4','M4 13a8 8 0 0 0 14.3 4.2L20 15.5','M20 19.5v-4h-4'],
+  download:['M12 4v11','M7.5 10.5 12 15l4.5-4.5','M5 19.5h14'],
+  camera:['M4 8.5A1.5 1.5 0 0 1 5.5 7H8l1.5-2h5L16 7h2.5A1.5 1.5 0 0 1 20 8.5v9a1.5 1.5 0 0 1-1.5 1.5h-13A1.5 1.5 0 0 1 4 17.5Z','c:12,13,3.2'],
+  bank:['M4 9.5 12 5l8 4.5','M5 9.5h14','M7 9.5v7','M12 9.5v7','M17 9.5v7','M4.5 19h15'],
+  chat:['M5 6.5A1.5 1.5 0 0 1 6.5 5h11A1.5 1.5 0 0 1 19 6.5v8a1.5 1.5 0 0 1-1.5 1.5H11l-4.5 3.5V16A1.5 1.5 0 0 1 5 14.5Z'],
+  repeat:['M17 3.5 20 6.5l-3 3','M4 11V9.5a3 3 0 0 1 3-3h13','M7 20.5 4 17.5l3-3','M20 13v1.5a3 3 0 0 1-3 3H4'],
+  x:['M6.5 6.5l11 11','M17.5 6.5l-11 11'],
+  chevd:['M6.5 9.5 12 15l5.5-5.5'],
+  chevr:['M9.5 6.5 15 12l-5.5 5.5'],
+  search:['c:11,11,6.2','M20 20l-4.3-4.3'],
+  link:['M10 14a4 4 0 0 0 5.7 0l3-3a4 4 0 0 0-5.7-5.7l-1 1','M14 10a4 4 0 0 0-5.7 0l-3 3a4 4 0 0 0 5.7 5.7l1-1'],
+  clock:['c:12,12,8','M12 7.5V12l3 2'],
+  alert:['M12 4.5 20.5 19h-17L12 4.5Z','M12 10v4','M12 16.6v.2'],
+  copy:['M9 9h10v10H9z','M5 15V5h10'],
+  tag:['M4 4h7.5l8.5 8.5-7.5 7.5L4 11.5V4Z','c:8,8,1.2'],
+  person:['c:12,8.5,3.5','M5 19.5a7 7 0 0 1 14 0'],
+  check:['M5 12.5l4.5 4.5L19 7.5'],
+  receipt:['M6.5 3.5h11v17l-2.75-1.6L12 20.5l-2.75-1.6L6.5 20.5Z','M9.5 8.5h5','M9.5 12h5'],
+  calendar:['M6 6h12a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2Z','M4 10.5h16','M8.5 4v3.5','M15.5 4v3.5'],
+  pin:['M12 21s6.5-5.6 6.5-11a6.5 6.5 0 0 0-13 0c0 5.4 6.5 11 6.5 11Z','c:12,10,2.3'],
+  coins:['c:9,9,5','M14.5 5.2a5 5 0 0 1 0 9.6','M5 15.5v2c0 1.4 1.8 2.5 4 2.5s4-1.1 4-2.5v-2'],
+  split:['M12 20v-7','M12 13 6 7V4','M12 13l6-6V4','M3.8 6.2 6 4l2.2 2.2','M15.8 6.2 18 4l2.2 2.2'],
+};
+function ic(name, cls){
+  const d = ICONS[name]; if (!d) return '';
+  return `<svg class="i${cls ? ' ' + cls : ''}" viewBox="0 0 24 24" aria-hidden="true">` + d.map(x => x.startsWith('c:')
+    ? (([cx, cy, r]) => `<circle cx="${cx}" cy="${cy}" r="${r}"/>`)(x.slice(2).split(',')) : `<path d="${x}"/>`).join('') + '</svg>';
+}
+
+/* ---------------- a colour per project ---------------- */
+// [light, dark]: each light one carries white text at 4.5:1 or better.
+const ACCENTS = [['#2563eb','#5b8cff'], ['#4f46e5','#8b8cf9'], ['#0f766e','#2dd4bf'], ['#15803d','#4ade80'],
+                 ['#c2410c','#fb923c'], ['#be185d','#f472b6'], ['#7e22ce','#c084fc'], ['#475569','#a3b1c6']];
+function accentIndex(p){
+  const picked = p && (PREFS.accent || {})[p.id];
+  if (Number.isInteger(picked) && picked >= 0 && picked < ACCENTS.length) return picked;
+  // The everyday project keeps the blue it always had; others get one from their id.
+  if (!p || p.id === 'p_general') return 0;
+  let h = 0; for (const ch of String(p.id)) h = (h * 31 + ch.charCodeAt(0)) >>> 0;
+  return h % ACCENTS.length;
+}
+function applyAccent(){
+  const [l, d] = ACCENTS[accentIndex(activeProject())];
+  const st = document.documentElement.style;
+  st.setProperty('--accent-l', l); st.setProperty('--accent-d', d);
+}
+
 const CITIES = [
   ['Australia','AUD'],['Sydney','AUD'],['Melbourne','AUD'],['Brisbane','AUD'],['Perth','AUD'],
   ['New Zealand','NZD'],['Auckland','NZD'],['Japan','JPY'],['Tokyo','JPY'],['Osaka','JPY'],['Kyoto','JPY'],
@@ -1388,6 +1555,7 @@ function go(name){
   const el = $('#s-' + name);
   if (el) el.classList.add('on');
   $$('.nav button[data-go]').forEach(b => b.classList.toggle('on', b.dataset.go === name));
+  document.body.classList.toggle('setup', name === 'setup');      // nothing to navigate to before connecting
   window.scrollTo(0,0);
   if (name === 'history') renderHistory();
   if (name === 'settle')  renderSettle();
@@ -1518,21 +1686,52 @@ function renderHome(){
     $('#tripTotal').textContent = fmtAudC(total) + ' spent';
   }
 
-  const tx = transfers(L);
-  $('#settleHint').textContent = !tx.length
-    ? (g ? 'You’re all square' : 'Everyone is square')
-    : tx.length === 1
-      ? `${tx[0].from} → ${tx[0].to} · ${fmtCurC(tx[0].c, tx[0].cur)}`
-      : `${tx.length} transfers clear it`;
+  renderHero(L);
+  $('#balTitle').textContent = g ? 'Between you' : 'Everyone';
 
-  // The two latest months with anything in them, in full; everything older is in History.
+  // The latest few, still grouped by month; everything else is in History.
   const all = pExpenses().slice().sort(byDateDesc);
-  const keep = monthsOf(all).slice(0, 2);
-  HOME_LIST = all.filter(e => keep.includes(monthKey(e.date)));
+  HOME_LIST = all.slice(0, HOME_MAX);
   $('#recent').innerHTML = HOME_LIST.length
     ? monthGroups('home', HOME_LIST, exRow, g => g.length + ' · ' + fmtAudC(g.reduce((a,e) => a + cents(e.amount_aud), 0)))
-    : `<div class="card"><div class="empty"><span class="big">🧾</span>No expenses yet.<br>Tap <b>+</b> to add the first one.</div></div>`;
+      + (all.length > HOME_LIST.length ? `<button class="btn ghost full sm" data-go="history">See all ${all.length} in History</button>` : '')
+    : `<div class="card"><div class="empty"><span class="big">${ic('receipt')}</span>No expenses yet.<br>Tap <b>+</b> to add the first one.</div></div>`;
   foldAllButton('home', HOME_LIST);
+}
+const HOME_MAX = 8;
+
+/** The top of Home: your own number first, then what clears it. */
+function renderHero(L){
+  const g = GUEST();
+  const me = linkPerson() || PREFS.me;
+  const tx = transfers(L);
+  const total = pExpenses().reduce((a,e) => a + cents(e.amount_aud), 0);
+  const known = me && (pPeople().includes(me) || L.pool[me] !== undefined || L.pairs.some(p => p.from === me || p.to === me));
+  let lbl, num, lines = [], foot;
+  if (known){
+    const nets = netsOf(me, L), main = settleCur(me), v = nets[main] || 0;
+    lbl = v < 0 ? 'You owe' : v > 0 ? 'You’re owed' : 'You’re all square';
+    num = v ? fmtCurC(Math.abs(v), main) : '';
+    Object.keys(nets).filter(c => c !== main).forEach(c =>
+      lines.push((nets[c] > 0 ? 'Also owed ' : 'Also owe ') + fmtCurC(Math.abs(nets[c]), c)));
+    tx.filter(t => t.from === me || t.to === me).slice(0, 3).forEach(t =>
+      lines.push(t.from === me ? `Pay ${t.to} ${fmtCurC(t.c, t.cur)}` : `${t.from} pays you ${fmtCurC(t.c, t.cur)}`));
+    const mine = pExpenses().reduce((a, ex) => a + (sharesOf(ex)[me] || 0), 0);
+    foot = g ? '' : `Your share ${fmtAudC(mine)} of ${fmtAudC(total)}`;
+  } else {
+    lbl = 'Spent so far'; num = fmtAudC(total);
+    if (tx.length === 1) lines.push(`${tx[0].from} pays ${tx[0].to} ${fmtCurC(tx[0].c, tx[0].cur)}`);
+    else if (tx.length) lines.push(`${tx.length} transfers clear it`);
+    else if (total) lines.push('Everyone is square');
+    foot = '';
+  }
+  $('#heroCard').innerHTML = `<div class="hero">
+      <div class="lbl">${esc(lbl)}</div>
+      ${num ? `<div class="num mono${num.length > 11 ? ' sm' : ''}" id="heroNum">${esc(num)}</div>` : '<div style="height:6px"></div>'}
+      ${lines.map(l => `<div class="line">${esc(l)}</div>`).join('')}
+      <div class="foot"><small>${esc(foot)}</small>
+        ${tx.length ? '<button class="hbtn" data-go="settle">Settle up</button>' : ''}</div>
+    </div>`;
 }
 
 function byDateDesc(a,b){
@@ -1542,11 +1741,11 @@ function byDateDesc(a,b){
 
 function exRow(ex){
   const me = ex.currency !== 'AUD';
-  const meta = [ex.date, ex.city, ex.paid_by + ' paid', splitLabel(ex.split_type)].filter(Boolean).join(' · ');
+  const meta = [shortDate(ex.date), ex.city, ex.paid_by + ' paid', splitLabel(ex.split_type)].filter(Boolean).join(' · ');
   return `<button class="ex press" data-ex="${esc(ex.id)}">
-    <div class="ic">${ex.category && catOf(ex.category) ? catOf(ex.category).icon : esc(cityIcon(ex.city) || dayBadge(ex.date))}</div>
+    <div class="ic${ex.category && catOf(ex.category) ? ' cat' : ''}">${ex.category && catOf(ex.category) ? ic(catOf(ex.category).ico) : esc(cityIcon(ex.city) || dayBadge(ex.date))}</div>
     <div class="grow">
-      <div class="t1 ellip">${isOccurrence(ex.id) ? '<span style="color:var(--accent)">↻</span> ' : ''}${esc(ex.description || 'Expense')}</div>
+      <div class="t1 ellip">${isOccurrence(ex.id) ? '<span style="color:var(--accent)">' + ic('repeat') + '</span> ' : ''}${esc(ex.description || 'Expense')}</div>
       <div class="t2 ellip">${esc(meta)}</div>
     </div>
     <div>
@@ -1571,32 +1770,43 @@ function splitLabel(t){
 
 /* ---------------- render: history ---------------- */
 
-let HF = { city:'', person:'', cat:'', from:'', to:'' };
+let HF = { city:'', person:'', cat:'', from:'', to:'', q:'' };
 let HIST_LIST = [];
 let HOME_LIST = [];      // what History is showing, so "Collapse all" folds exactly those months
 
 function renderHistory(){
-  const view = PREFS.histView === 'breakdown' ? 'breakdown' : 'list';
+  const allowed = GUEST() ? ['list', 'breakdown'] : ['list', 'breakdown', 'activity'];
+  const view = allowed.includes(PREFS.histView) ? PREFS.histView : 'list';
   $$('#histView button').forEach(b => b.classList.toggle('on', b.dataset.hview === view));
+  $('#histView').style.gridTemplateColumns = `repeat(${allowed.length},1fr)`;
   $('#bdWrap').style.display = view === 'breakdown' ? '' : 'none';
   $('#listWrap').style.display = view === 'list' ? '' : 'none';
+  $('#actWrap').style.display = view === 'activity' ? '' : 'none';
+  $('#xlsxBtn').style.display = view === 'list' ? '' : 'none';
   if (view === 'breakdown') renderBreakdown();
-  const cities = Array.from(new Set(pExpenses().map(e => e.city).filter(Boolean)));
-  const cityWrap = $('#fCity').previousElementSibling;   // its section label
-  if (cities.length > 1){
-    $('#fCity').style.display = ''; if (cityWrap) cityWrap.style.display = '';
-    $('#fCity').innerHTML = [['','All places']].concat(cities.map(c => [c,c]))
-      .map(([v,l]) => `<button class="chip ${HF.city===v?'on':''}" data-fc="${esc(v)}">${esc(l)}</button>`).join('');
-  } else {
-    HF.city = ''; $('#fCity').style.display = 'none'; if (cityWrap) cityWrap.style.display = 'none';
-  }
-  $('#fPerson').innerHTML = [['','Everyone']].concat(pPeople().map(p => [p,p]))
-    .map(([v,l]) => `<button class="chip ${HF.person===v?'on':''}" data-fp="${esc(v)}">${esc(l)}</button>`).join('');
+  if (view === 'activity'){ renderDeleted(); renderChanges(); }
 
-  $('#fCat').innerHTML = [['','All'], ...CATS.map(c => [c.id, c.icon + ' ' + c.label]), ['none','Not set']]
-    .map(([v,l]) => `<button class="chip ${HF.cat===v?'on':''}" data-fcat="${esc(v)}">${esc(l)}</button>`).join('');
+  // One pill per filter. A pill is a native picker underneath, so it works like any iPhone menu.
+  const cities = Array.from(new Set(pExpenses().map(e => e.city).filter(Boolean)));
+  if (cities.length < 2) HF.city = '';
+  const pick = (key, any, opts) => {
+    const cur = opts.find(o => o[0] === HF[key]);
+    return `<label class="fpill ${HF[key] ? 'on' : ''}"><span>${esc(HF[key] && cur ? cur[1] : any)}</span>${ic('chevd')}
+      <select data-fsel="${key}" aria-label="${esc(any)}"><option value="">${esc(any)}</option>${
+        opts.map(o => `<option value="${esc(o[0])}"${HF[key] === o[0] ? ' selected' : ''}>${esc(o[1])}</option>`).join('')}</select></label>`;
+  };
+  const dated = HF.from || HF.to;
+  const active = HF.person || HF.cat || HF.city || dated || HF.q;
+  $('#fPills').innerHTML =
+      (active ? `<button class="fpill" id="fClear" aria-label="Clear filters">${ic('x')}<span>Clear</span></button>` : '')
+    + pick('person', 'Anyone', pPeople().map(n => [n, n]))
+    + pick('cat', 'Any category', CATS.map(c => [c.id, c.label]).concat([['none', 'Not set']]))
+    + (cities.length > 1 ? pick('city', 'Any place', cities.map(c => [c, c])) : '')
+    + `<button class="fpill ${dated ? 'on' : ''}" id="fDatesBtn">${ic('calendar')}<span>${dated
+        ? esc((HF.from ? shortDate(HF.from) : 'Start') + ' – ' + (HF.to ? shortDate(HF.to) : 'today')) : 'Dates'}</span></button>`;
+  $('#fDates').style.display = HF_DATES || dated ? 'flex' : 'none';
   $('#fFrom').value = HF.from; $('#fTo').value = HF.to;
-  $('#fDatesClear').style.display = HF.from || HF.to ? '' : 'none';
+  if (document.activeElement !== $('#fSearch')) $('#fSearch').value = HF.q || '';
 
   const list = histFiltered().sort(byDateDesc);
 
@@ -1605,15 +1815,27 @@ function renderHistory(){
   $('#histCount').textContent = list.length + ' · ' + fmtAudC(sum);
   $('#histList').innerHTML = list.length
     ? monthGroups('hist', list, exRow, g => g.length + ' · ' + fmtAudC(g.reduce((a,e) => a + cents(e.amount_aud), 0)))
-    : `<div class="card"><div class="empty"><span class="big">🔍</span>Nothing matches that filter.</div></div>`;
+    : `<div class="card"><div class="empty"><span class="big">${ic('search')}</span>Nothing matches that filter.</div></div>`;
   foldAllButton('hist', list);
+}
+let HF_DATES = false;      // the From/To row is showing
+/** '2026-10-17' → '17 Oct'. */
+function shortDate(d){
+  const m = String(d || '').match(/^\d{4}-(\d{2})-(\d{2})$/);
+  return m ? Number(m[2]) + ' ' + MONTH_NAMES[Number(m[1]) - 1].slice(0, 3) : String(d || '');
 }
 
 /** History's filters: place, person involved, category and a date range (inclusive). */
 function inDates(d){ return (!HF.from || d >= HF.from) && (!HF.to || d <= HF.to); }
 function histFiltered(){
+  const words = String(HF.q || '').toLowerCase().split(/\s+/).filter(Boolean);
   return pExpenses().filter(ex => {
     if (!inDates(ex.date)) return false;
+    if (words.length){
+      const hay = [ex.description, ex.city, ex.paid_by, ex.category && catOf(ex.category) ? catOf(ex.category).label : '',
+        Number(ex.amount_local).toFixed(2), Number(ex.amount_aud).toFixed(2), ex.currency, ex.date].join(' ').toLowerCase();
+      if (!words.every(w => hay.includes(w))) return false;
+    }
     if (HF.cat === 'none' ? ex.category : HF.cat && ex.category !== HF.cat) return false;
     if (HF.city && ex.city !== HF.city) return false;
     if (HF.person){
@@ -1632,6 +1854,7 @@ function filterNote(){
   if (HF.city) bits.push(HF.city);
   if (HF.person) bits.push('involving ' + HF.person);
   if (HF.cat) bits.push(HF.cat === 'none' ? 'no category' : catOf(HF.cat).label);
+  if (HF.q) bits.push('matching "' + HF.q + '"');
   return bits.length ? 'Filtered: ' + bits.join(' · ') : 'All expenses in this project';
 }
 
@@ -1703,16 +1926,16 @@ function renderSettle(){
     html += `<div class="banner warn" style="margin-top:8px"><span class="dot pend"></span><div>You settle in AUD with the
       rest of the group, so ask the organiser who to pay — that part needs everyone's expenses.</div></div>`;
   }
-  $('#transfers').innerHTML = html || `<div class="empty"><span class="big">✨</span>All square — no transfers needed.</div>`;
+  $('#transfers').innerHTML = html || `<div class="empty"><span class="big">${ic('receipt')}</span>All square — no transfers needed.</div>`;
   window.__tx = tx;
 
   const log = pSettlements().slice().sort(byDateDesc);
   $('#settleLog').innerHTML = log.length ? monthGroups('settle', log, st => `
     <div class="xfer" id="st-${esc(st.id)}">
-      <div class="ic" style="width:40px;height:40px;border-radius:11px;background:var(--surface-2);display:grid;place-items:center">${st.status === 'pending' ? '⏳' : st.status === 'disputed' ? '!' : '✓'}</div>
+      <div class="ic" style="width:40px;height:40px;border-radius:11px;background:var(--surface-2);display:grid;place-items:center">${ic(st.status === 'pending' ? 'clock' : st.status === 'disputed' ? 'alert' : 'check')}</div>
       <div class="grow">
         <div style="font-weight:620">${esc(st.from)} <span class="arrow">→</span> ${esc(st.to)}</div>
-        <div style="font-size:12.5px;color:var(--muted)">${isOccurrence(st.id)?'↻ ':''}${esc(st.date)}${st.note?' · '+esc(st.note):''}</div>
+        <div style="font-size:12.5px;color:var(--muted)">${isOccurrence(st.id)? ic('repeat') + ' ' :''}${esc(st.date)}${st.note?' · '+esc(st.note):''}</div>
         ${settleStatus(st)}
         ${!linkPerson() && PREFS.me && PREFS.me === st.to && st.status === 'pending'
           ? `<div style="font-size:12.5px;color:var(--muted);margin-top:4px">To confirm, open the app with your own link (Settings → Links and invites).</div>` : ''}
@@ -2191,9 +2414,9 @@ function renderImport(){
     const state = { split: 'Split', personal: 'Personal', linked: 'Linked to an expense', settled: 'Logged as a settlement', done: SKIP_WHY.done }[it.status];
     return `<div class="xfer" style="display:block">
       <div class="row" style="gap:10px;align-items:flex-start">
-        <div class="ic" style="width:36px;height:36px;border-radius:10px;background:var(--surface-2);display:grid;place-items:center;flex:none">${it.status==='todo' && cat ? cat.icon : it.credit ? '↩' : '·'}</div>
+        <div class="ic" style="width:36px;height:36px;border-radius:10px;background:var(--surface-2);display:grid;place-items:center;flex:none">${it.status==='todo' && cat ? ic(cat.ico) : it.credit ? '↩' : '·'}</div>
         <div class="grow" style="min-width:0">
-          <div style="font-weight:620" class="ellip">${it.ok === false ? '⚠ ' : ''}${esc(it.merchant)}</div>
+          <div style="font-weight:620" class="ellip">${it.ok === false ? ic('alert') + ' ' : ''}${esc(it.merchant)}</div>
           <div style="font-size:12.5px;color:var(--muted)">${esc(prettyDate(it.date))}${it.status === 'skip' ? ' · ' + esc(SKIP_WHY[it.why] || it.why) : state ? ' · ' + esc(state) : cat ? ' · ' + esc(cat.label) + '?' : ''}</div>
         </div>
         <div class="mono" style="font-weight:700;${it.credit ? 'color:var(--pos)' : ''}">${it.credit ? '−' : ''}${esc(fmtAud(it.amount))}</div>
@@ -2204,7 +2427,7 @@ function renderImport(){
       <div class="card">${list.map(it => row(it, items.indexOf(it))).join('')}</div></details>` : '';
 
   body.innerHTML = `<div class="banner ${bad.length ? 'warn' : 'ok'}" style="margin-top:0"><div>${summary}</div></div>
-    ${todo.length ? section('To review', todo, true) : `<div class="card"><div class="empty"><span class="big">✅</span>All done.</div></div>`}
+    ${todo.length ? section('To review', todo, true) : `<div class="card"><div class="empty"><span class="big">${ic('check')}</span>All done.</div></div>`}
     ${section('Skipped automatically', skipped, false)}
     ${section('Done', done, false)}
     <div class="stack" style="margin-top:12px">
@@ -2571,14 +2794,14 @@ function exportWorkbook(d){
 
 /* cats:start — pure functions, exercised by tests/breakdown.test.mjs */
 const CATS = [
-  { id:'food',       label:'Food & drink', icon:'🍜' },
-  { id:'transport',  label:'Transport',    icon:'🚕' },
-  { id:'stay',       label:'Stay',         icon:'🏨' },
-  { id:'activities', label:'Activities',   icon:'🎟️' },
-  { id:'shopping',   label:'Shopping',     icon:'🛍️' },
-  { id:'groceries',  label:'Groceries',    icon:'🛒' },
-  { id:'bills',      label:'Bills',        icon:'💡' },
-  { id:'other',      label:'Other',        icon:'📦' },
+  { id:'food',       label:'Food & drink', ico:'food' },
+  { id:'transport',  label:'Transport',    ico:'transport' },
+  { id:'stay',       label:'Stay',         ico:'stay' },
+  { id:'activities', label:'Activities',   ico:'activities' },
+  { id:'shopping',   label:'Shopping',     ico:'shopping' },
+  { id:'groceries',  label:'Groceries',    ico:'groceries' },
+  { id:'bills',      label:'Bills',        ico:'bills' },
+  { id:'other',      label:'Other',        ico:'other' },
 ];
 const catOf = id => CATS.find(c => c.id === id) || null;
 
@@ -2646,8 +2869,9 @@ function slices(rows, order){
 function renderCats(){
   const box = $('#exCats');
   if (!box || !F) return;
+  renderFormSummary();
   box.innerHTML = CATS.map(c =>
-    `<button class="chip ${F.category===c.id?'on':''}" data-cat="${c.id}">${c.icon} ${esc(c.label)}</button>`).join('');
+    `<button class="chip ${F.category===c.id?'on':''}" data-cat="${c.id}">${ic(c.ico)} ${esc(c.label)}</button>`).join('');
 }
 
 /* What the breakdown is showing. Remembered on this phone. */
@@ -2665,7 +2889,7 @@ function bdOrder(by){
 }
 function bdLabel(by, k, plain){
   if (k === '__rest') return 'Everything else';
-  if (by === 'category') return catOf(k) ? (plain ? '' : catOf(k).icon + ' ') + catOf(k).label : k;
+  if (by === 'category') return catOf(k) ? catOf(k).label : k;
   if (by === 'place') return k || 'No place';
   return k;
 }
@@ -2706,7 +2930,7 @@ function renderBreakdown(){
   const { rows, guessed } = breakdown(list, bd.by, bd.by === 'person' ? '' : bd.who, sharesOf);
   const total = rows.reduce((a, r) => a + r.c, 0);
   if (!total){
-    $('#bdChart').innerHTML = `<div class="empty"><span class="big">🥧</span>Nothing to break down for this choice.</div>`;
+    $('#bdChart').innerHTML = `<div class="empty"><span class="big">${ic('receipt')}</span>Nothing to break down for this choice.</div>`;
     return;
   }
 
@@ -2743,7 +2967,7 @@ function renderBreakdown(){
       const dim = hlKey && !(r.key === hlKey || (hlKey === '__rest' && folded.has(r.key)));
       return `<button class="bd-row${dim ? ' dim' : ''}" data-bdhl="${esc(r.key)}">
         <span class="dot" style="background:${col}"></span>
-        <span style="font-weight:620">${esc(bdLabel(bd.by, r.key))}</span>
+        <span style="font-weight:620">${bd.by === 'category' && catOf(r.key) ? ic(catOf(r.key).ico) + ' ' : ''}${esc(bdLabel(bd.by, r.key))}</span>
         <span class="mono" style="font-weight:650">${esc(fmtAudC(r.c))} <span style="color:var(--muted);font-weight:500">${pct < 1 ? '<1' : Math.round(pct)}%</span></span>
         <span class="bar"><i style="width:${Math.max(pct, 1).toFixed(1)}%;background:${col}"></i></span>
       </button>`;
@@ -2820,7 +3044,7 @@ function needsAttention(d){
 }
 /* attn:end */
 
-const ATTN_ICON = { needlink: '🔗', confirm: '⏳', disputed: '!', stale: '⏳', sync: '⚠', import: '🏦', dup: '⧉', norate: '¤', gone: '👤', nocat: '🏷' };
+const ATTN_ICON = { needlink: 'link', confirm: 'clock', disputed: 'alert', stale: 'clock', sync: 'alert', import: 'bank', dup: 'copy', norate: 'coins', gone: 'person', nocat: 'tag' };
 const ATTN_DO = { needlink: 'Set up', confirm: 'Review', disputed: 'Review', stale: 'Review', sync: 'See why', import: 'Continue', dup: 'Compare', norate: 'Fix', gone: 'Fix', nocat: 'Set' };
 
 function attentionList(){
@@ -2839,19 +3063,18 @@ function renderAttention(){
   if (!box) return;
   const list = attentionList();
   const row = it => `<div class="split-line" style="align-items:center;gap:10px">
-      <span style="width:22px;text-align:center;flex:none">${ATTN_ICON[it.kind]}</span>
+      <span style="width:22px;text-align:center;flex:none;color:var(--warn)">${ic(ATTN_ICON[it.kind])}</span>
       <span style="flex:1;min-width:0"><span style="font-weight:620">${esc(it.title)}</span>
         <span style="display:block;font-size:12.5px;color:var(--muted)">${esc(it.detail)}</span></span>
-      ${it.dismiss ? `<button class="iconbtn" data-attnoff="${esc(it.key)}" title="Dismiss">×</button>` : ''}
+      ${it.dismiss ? `<button class="iconbtn" data-attnoff="${esc(it.key)}" title="Dismiss">${ic('x')}</button>` : ''}
       <button class="btn sm ghost" data-attn="${esc(it.key)}">${ATTN_DO[it.kind]}</button></div>`;
-  box.innerHTML = list.length ? `<div class="card">
-      <div class="row between" style="margin-bottom:4px"><h3 style="font-size:15px">Needs attention</h3>
-        <span class="tag mono">${list.length}</span></div>
-      ${list.slice(0, 3).map(row).join('')}
-      ${list.length > 3 ? `<button class="linkbtn" id="attnAll" style="margin-top:8px">See all ${list.length}</button>` : ''}
+  // On Home: a count that opens the full list, then one pill each.
+  box.innerHTML = list.length ? `<div class="pills">
+      <button class="pill count" id="attnAll">${ic('alert')}<span>${list.length} to check</span></button>
+      ${list.slice(0, 6).map(it => `<button class="pill" data-attn="${esc(it.key)}">${ic(ATTN_ICON[it.kind])}<span>${esc(it.title)}</span></button>`).join('')}
     </div>` : '';
   if ($('#attnSheet').classList.contains('on')) $('#attnBody').innerHTML = list.length ? `<div class="card">${list.map(row).join('')}</div>`
-    : `<div class="card"><div class="empty"><span class="big">✅</span>Nothing needs attention.</div></div>`;
+    : `<div class="card"><div class="empty"><span class="big">${ic('check')}</span>Nothing needs attention.</div></div>`;
 }
 
 function attnGo(key){
@@ -2862,9 +3085,13 @@ function attnGo(key){
   else if (it.kind === 'needlink'){ go('more'); setTimeout(() => { const b = $('#inviteBox'); if (b) b.scrollIntoView({ block: 'center' }); }, 50); }
   else if (it.kind === 'sync') go('home');
   else if (it.kind === 'import') openImport();
-  else if (it.kind === 'dup'){ PREFS.histView = 'list'; HF = { city:'', person:'', cat:'', from:'', to:'' }; go('history');
+  else if (it.kind === 'dup'){ PREFS.histView = 'list'; HF = { city:'', person:'', cat:'', from:'', to:'', q:'' }; go('history');
     const [a] = it.ids; const ex = S.expenses.find(e => String(e.id) === a); if (ex){ HF.from = HF.to = ex.date; renderHistory(); } }
-  else openEdit(it.id);
+  else {
+    openEdit(it.id);
+    // Open the line that needs the answer.
+    FOPEN = it.kind === 'nocat' ? 'cat' : it.kind === 'gone' ? 'split' : ''; renderFormSummary();
+  }
 }
 /** Settle up, on the project and month holding this settlement, with it in view. */
 function showSettlement(id){
@@ -2952,7 +3179,7 @@ function monthGroups(scope, list, row, summary){
       <button class="month-head" data-fold="${scope}|${g.k}" aria-expanded="${!shut}">
         <span class="grow">${esc(monthName(g.k))}</span>
         <span class="month-sum mono">${esc(summary(g.items))}</span>
-        <span class="chev" aria-hidden="true">⌄</span>
+        <span class="chev" aria-hidden="true">${ic('chevd')}</span>
       </button>
       ${shut ? '' : `<div class="month-body">${g.items.map(row).join('')}</div>`}
     </div>`;
@@ -3040,7 +3267,7 @@ function renderRecurCard(){
   box.innerHTML = `<div class="card tight press" id="recurOpen" style="cursor:pointer">
     <div class="row between">
       <div>
-        <div style="font-size:13px;color:var(--muted)">↻ ${rules.length} recurring${live.length < rules.length ? ` · ${rules.length - live.length} paused or ended` : ''}</div>
+        <div style="font-size:13px;color:var(--muted)">${ic('repeat')} ${rules.length} recurring${live.length < rules.length ? ` · ${rules.length - live.length} paused or ended` : ''}</div>
         <div style="font-weight:650;margin-top:2px">${soonest
           ? `Next: ${esc(ruleTitle(soonest.r))} · ${esc(prettyDate(soonest.d))}`
           : 'Nothing scheduled'}</div>
@@ -3058,7 +3285,7 @@ function renderRecurList(){
                 : !nd ? '<span class="tag">ended</span>'
                 : `<span class="tag live">${esc(prettyDate(nd))}</span>`;
     return `<div class="bal press" data-rule="${esc(r.id)}" style="cursor:pointer">
-      <div class="av">${r.kind === 'transfer' ? '⇄' : '↻'}</div>
+      <div class="av">${ic(r.kind === 'transfer' ? 'split' : 'repeat')}</div>
       <div class="grow">
         <div style="font-weight:650" class="ellip">${esc(ruleTitle(r))}</div>
         <div style="font-size:12.5px;color:var(--muted)">${esc(ruleAmountText(r))} · ${esc(freqLabel(r.frequency))}${r.end_date ? ' · until ' + esc(prettyDate(r.end_date)) : ''}</div>
@@ -3351,7 +3578,7 @@ function renderMore(){
         ${r.orig && CURS().length > 1 ? `<select data-pcur="${esc(r.orig)}" title="Settles in"
             style="width:auto;min-width:76px;flex:none">${CURS().map(c =>
             `<option value="${c}"${settleCur(r.orig) === c ? ' selected' : ''}>${c}</option>`).join('')}</select>` : ''}
-        <button class="iconbtn" data-prm="${i}" title="Remove"${PED.length < 2 ? ' disabled' : ''}>×</button>
+        <button class="iconbtn" data-prm="${i}" title="Remove"${PED.length < 2 ? ' disabled' : ''}>${ic('x')}</button>
       </div>`).join('')
     + `<button class="btn ghost full sm" id="addPerson" style="margin-bottom:8px">+ Add person</button>
        <button class="btn primary full sm" id="savePeople">Save people</button>
@@ -3443,13 +3670,15 @@ function curOf(city, fallback){
 
 function openAdd(){
   if (!S.people.length){ toast('Add people in Settings first'); go('more'); return; }
-  F = newForm();
+  F = newForm(); FOPEN = '';
   $('#exTitle').textContent = 'New expense';
   $('#exDelete').style.display = 'none';
   renderForm();
   renderAiNote();
   showAiBar();
   openSheet('exSheet');
+  // Amount first: on a phone this brings the number pad straight up.
+  try { $('#exAmount').focus({ preventScroll: true }); } catch(e){}
 }
 
 function openEdit(id){
@@ -3474,6 +3703,7 @@ function openEdit(id){
                : [{ name:'', amount:'', people:S.people.slice() }],
     extra:   pack.extra ? String(pack.extra) : ''
   };
+  FOPEN = '';
   $('#exTitle').textContent = 'Edit expense';
   $('#exDelete').style.display = '';
   renderForm();
@@ -3490,9 +3720,31 @@ function formAmount(){
   return F.split_type === 'itemized' ? itemsTotal() : (Number(F.amount) || 0);
 }
 
+/** Which line of the form is open; one at a time. */
+let FOPEN = '';
+function toggleFormRow(key){ FOPEN = FOPEN === key ? '' : key; renderFormSummary(); }
+
+/** What each line of the form says while it is shut. */
+function renderFormSummary(){
+  if (!F) return;
+  const me = linkPerson() || PREFS.me, everyone = pPeople().length;
+  const say = {
+    paid: F.paid_by ? (F.paid_by === me ? 'You' : F.paid_by) : 'Pick someone',
+    split: F.split_type === 'equal'
+        ? (F.participants.length >= everyone ? 'Equally, everyone' : `Equally, ${F.participants.length} of ${everyone}`)
+        : ({ exact:'Exact amounts', percent:'By percentage', itemized:'By item' })[F.split_type],
+    cat: F.category && catOf(F.category) ? catOf(F.category).label : 'Not set',
+    date: F.date === today() ? 'Today' : prettyDate(F.date),
+    city: F.city || 'Not set',
+    repeat: F.repeat && F.repeat !== 'never' ? freqLabel(F.repeat) : 'Never',
+  };
+  Object.keys(say).forEach(k => { const el = $('#fv-' + k); if (el) el.textContent = say[k]; });
+  $$('#exSheet .frow').forEach(r => r.classList.toggle('open', r.dataset.frow === FOPEN));
+}
+
 function renderForm(){
   const cityList = pCities();
-  const cityWrap = $('#exCity').parentElement;   // closest('div') would match #exCity itself
+  const cityWrap = $('#exCity').closest('.frow');
   if (cityList.length > 1){
     if (cityWrap) cityWrap.style.display = '';
     $('#exCity').innerHTML = cityList.map(n => {
@@ -3515,6 +3767,7 @@ function renderForm(){
   // An AUD-only project stays uncluttered: just a link, until you need it.
   const showChips = curList.length > 1 || F.curOpen;
   $('#exCurWrap').style.display = showChips ? '' : 'none';
+  $('#exCur').style.display = showChips ? 'none' : '';
   $('#exCurMore').style.display = showChips ? 'none' : '';
   $('#exCurChips').innerHTML = curList.map(c =>
       `<button class="chip ${F.cur===c?'on':''}" data-curpick="${c}">${c}</button>`).join('')
@@ -3577,7 +3830,7 @@ function renderSplitBody(){
           <div class="row" style="margin-bottom:8px">
             <input type="text" data-iname="${i}" value="${esc(it.name)}" placeholder="Item" class="grow">
             <input type="text" inputmode="decimal" data-iamt="${i}" value="${esc(it.amount)}" placeholder="0.00" style="width:96px;text-align:right">
-            <button class="iconbtn" data-idel="${i}" title="Remove">×</button>
+            <button class="iconbtn" data-idel="${i}" title="Remove">${ic('x')}</button>
           </div>
           <div class="chips">${pPeople().map(p =>
             `<button class="chip sm ${it.people.includes(p)?'on':''}" data-ip="${i}:${esc(p)}"
@@ -3602,7 +3855,7 @@ function renderRepeat(){
   if (!isNew && F.seriesId){
     sn.style.display = '';
     sn.innerHTML = `<div class="banner ok" style="margin:0;align-items:center">
-      <span>↻</span><div class="grow">Part of a ${series ? esc(freqLabel(series.frequency).toLowerCase()) : 'recurring'} series.
+      <span>${ic('repeat')}</span><div class="grow">Part of a ${series ? esc(freqLabel(series.frequency).toLowerCase()) : 'recurring'} series.
       Changes here affect this one only.</div>
       ${series ? `<button class="linkbtn" data-rule="${esc(series.id)}">Manage</button>` : ''}</div>`;
   } else { sn.style.display = 'none'; }
@@ -3664,6 +3917,7 @@ function numBag(o){
 }
 
 function renderPreview(){
+  renderFormSummary();
   const ex = draftExpense();
   const rate = fRate();
   if (!ex.amount_local){ $('#exPreview').innerHTML = `<div style="color:var(--muted);font-size:13.5px">Enter an amount to see the split.</div>`; return; }
@@ -3809,7 +4063,7 @@ function openDetail(id, review){
       <div class="split-line"><span>Date</span><b>${esc(ex.date)}</b></div>
       ${ex.city ? `<div class="split-line"><span>Place</span><b>${esc(ex.city)}</b></div>` : ''}
       <div class="split-line"><span>Paid by</span><b>${esc(ex.paid_by)}</b></div>
-      ${ex.category && catOf(ex.category) ? `<div class="split-line"><span>Category</span><b>${catOf(ex.category).icon} ${esc(catOf(ex.category).label)}</b></div>` : ''}
+      ${ex.category && catOf(ex.category) ? `<div class="split-line"><span>Category</span><b>${ic(catOf(ex.category).ico)} ${esc(catOf(ex.category).label)}</b></div>` : ''}
       <div class="split-line"><span>Split</span><b>${esc(splitLabel(ex.split_type))}</b></div>
       <div class="split-line"><span>Rate used</span><b class="mono">${rate ? esc(fmtPerAud(ex.currency, rate)) : '—'}</b></div>
       ${ex.created_by ? `<div class="split-line"><span>Added by</span><b>${esc(ex.created_by)}</b></div>` : ''}
@@ -4018,7 +4272,7 @@ function renderInvites(){
       <div class="grow" style="min-width:0"><div style="font-weight:650">${esc(i.person)}</div>
         <div style="font-size:12.5px;color:var(--muted)">${i.role === 'member' ? 'Full access' : esc(i.project_ids.map(pname).join(', '))} · settles in ${esc(settleCur(i.person))}</div></div>
       <button class="btn sm ghost" data-invlink="${esc(i.token)}">Link</button>
-      <button class="iconbtn" data-invoff="${esc(i.token)}" title="Turn off">×</button>
+      <button class="iconbtn" data-invoff="${esc(i.token)}" title="Turn off">${ic('x')}</button>
     </div>`).join('')
     + `<button class="btn ghost full sm" id="invNew">+ Invite someone</button>`;
 }
@@ -4180,18 +4434,19 @@ document.addEventListener('click', e => {
   const t = e.target.closest('[data-go],[data-close],[data-ex],[data-city],[data-paid],[data-part],' +
     '[data-st],[data-fc],[data-fp],[data-rate],[data-pay],[data-unsettle],[data-editex],[data-ip],[data-idel],[data-me],[data-prm],'+
     '[data-proj],[data-pedit],[data-pecur],[data-pemem],[data-kind],[data-curpick],[data-curq],[data-curother],'+
-    '[data-rep],[data-rule],[data-rxfrom],[data-rxto],[data-rxfreq],[data-peall]');
+    '[data-rep],[data-rule],[data-rxfrom],[data-rxto],[data-rxfreq],[data-peall],[data-frowt]');
   if (!t) return;
   const d = t.dataset;
 
   if (d.go)        { go(d.go); }
+  else if (d.frowt){ toggleFormRow(d.frowt); }
   else if (d.close){ closeSheet(d.close); }
   else if (d.ex)   { openDetail(d.ex); }
   else if (d.editex){ closeSheet('detSheet'); openEdit(d.editex); }
   else if (d.city !== undefined && d.city !== ''){
-    F.city = d.city; setCur(curOf(d.city, F.cur)); renderForm();
+    F.city = d.city; setCur(curOf(d.city, F.cur)); FOPEN = ''; renderForm();
   }
-  else if (d.paid) { F.paid_by = d.paid; renderForm(); }
+  else if (d.paid) { F.paid_by = d.paid; FOPEN = ''; renderForm(); }
   else if (d.part) {
     const i = F.participants.indexOf(d.part);
     if (i >= 0){ if (F.participants.length > 1) F.participants.splice(i,1); }
@@ -4209,7 +4464,7 @@ document.addEventListener('click', e => {
     ensurePED();
     if (PED.length > 1){ PED.splice(Number(d.prm), 1); renderMore(); }
   }
-  else if (d.rep){ F.repeat = d.rep; renderRepeat(); }
+  else if (d.rep){ F.repeat = d.rep; renderRepeat(); renderFormSummary(); }
   else if (d.rule){ closeSheet('exSheet'); openRule(d.rule); }
   else if (d.rxfrom){ RX.from = d.rxfrom; if (RX.to === RX.from) RX.to = pPeople().find(p => p !== RX.from); renderRxfer(); }
   else if (d.rxto){ RX.to = d.rxto; if (RX.from === RX.to) RX.from = pPeople().find(p => p !== RX.to); renderRxfer(); }
@@ -4282,7 +4537,7 @@ document.addEventListener('click', e => {
   if (e.target.id === 'cancelPeople'){ PED = null; renderMore(); toast('Changes discarded'); }
   if (e.target.id === 'invNew') openInvite();
   if (e.target.id === 'chAll'){ CH_ALL = true; renderChanges(); return; }
-  if (e.target.id === 'attnAll'){ openSheet('attnSheet'); renderAttention(); return; }
+  if (e.target.closest('#attnAll')){ openSheet('attnSheet'); renderAttention(); return; }
   const at = e.target.closest('[data-attn],[data-attnoff]');
   if (at){ at.dataset.attnoff ? attnDismiss(at.dataset.attnoff) : attnGo(at.dataset.attn); return; }
   const sa = e.target.closest('[data-stok],[data-stno]');
@@ -4315,12 +4570,16 @@ document.addEventListener('click', e => {
   }
   const fc = e.target.closest('[data-fcat]');
   if (fc){ HF.cat = fc.dataset.fcat; renderHistory(); return; }
-  if (e.target.id === 'fDatesClear'){ HF.from = HF.to = ''; renderHistory(); return; }
+  const sw = e.target.closest('[data-peaccent]');
+  if (sw && PE){ PE.accent = Number(sw.dataset.peaccent); renderProjectEditor(); return; }
+  if (e.target.closest('#fClear')){ HF = { city:'', person:'', cat:'', from:'', to:'', q:'' }; HF_DATES = false; $('#fSearch').value = ''; renderHistory(); return; }
+  if (e.target.closest('#fDatesBtn')){ HF_DATES = !($('#fDates').style.display !== 'none'); if (!HF_DATES) HF.from = HF.to = ''; renderHistory(); return; }
+  if (e.target.closest('#toActivity')){ PREFS.histView = 'activity'; save(K_PREFS, PREFS); go('history'); return; }
   if (e.target.closest('#xlsxBtn')){ exportExcel(); return; }
   const bt = e.target.closest('[data-cat],[data-hview],[data-bdby],[data-bdwho],[data-bdwhen],[data-bdhl]');
   if (bt){
     const d = bt.dataset;
-    if (d.cat){ F.category = F.category === d.cat ? '' : d.cat; F.catPicked = true; renderCats(); }
+    if (d.cat){ F.category = F.category === d.cat ? '' : d.cat; F.catPicked = true; if (F.category) FOPEN = ''; renderCats(); }
     else if (d.hview){ PREFS.histView = d.hview; save(K_PREFS, PREFS); BD_HL = ''; renderHistory(); }
     else if (d.bdby){ BD().by = d.bdby; BD_HL = ''; save(K_PREFS, PREFS); renderBreakdown(); }
     else if (d.bdwho !== undefined){ BD().who = d.bdwho; BD_HL = ''; save(K_PREFS, PREFS); renderBreakdown(); }
@@ -4363,6 +4622,7 @@ document.addEventListener('click', e => {
 
 document.addEventListener('change', e => {
   const el = e.target;
+  if (el.dataset.fsel){ HF[el.dataset.fsel] = el.value; renderHistory(); return; }
   if ((el.id === 'fFrom' || el.id === 'fTo') && HF[el.id === 'fFrom' ? 'from' : 'to'] !== el.value){
     HF[el.id === 'fFrom' ? 'from' : 'to'] = el.value;      // iOS date pickers report on change, not input
     if (HF.from && HF.to && HF.from > HF.to) HF[el.id === 'fFrom' ? 'to' : 'from'] = el.value;
@@ -4392,7 +4652,7 @@ document.addEventListener('input', e => {
     // Until a category is tapped, it follows what the description says.
     if (!F.catPicked){ F.category = guessCategory(F.desc); renderCats(); }
   }
-  else if (el.id === 'exDate' && F){ F.date = el.value; if (!F.id) renderRepeat(); }
+  else if (el.id === 'exDate' && F){ F.date = el.value; if (!F.id) renderRepeat(); renderFormSummary(); }
   else if (el.id === 'exUntil' && F){ F.until = el.value; }
   else if (el.id === 'exExtra' && F){ F.extra = el.value.replace(/[^0-9.]/g,''); refreshItemTotals(); }
   else if (el.dataset.share && F){
@@ -4407,6 +4667,7 @@ document.addEventListener('input', e => {
     if (av && av.classList.contains('av')) av.textContent = initials(el.value) || '?';
   }
   else if (el.id === 'invName' && INV){ INV.newName = el.value; }
+  else if (el.id === 'fSearch'){ HF.q = el.value.trim(); renderHistory(); }
   else if (el.id === 'fFrom' || el.id === 'fTo'){
     HF[el.id === 'fFrom' ? 'from' : 'to'] = el.value;
     if (HF.from && HF.to && HF.from > HF.to) HF[el.id === 'fFrom' ? 'to' : 'from'] = el.value;
@@ -4563,10 +4824,18 @@ $('#cfgClear').addEventListener('click', () => {
 
 window.addEventListener('online', () => sync());
 document.addEventListener('visibilitychange', () => { if (!document.hidden) sync(); });
+let lastY = 0;
 window.addEventListener('scroll', () => {
+  const y = window.scrollY;
   const tb = document.querySelector('.screen.on .topbar');
-  if (tb) tb.classList.toggle('stuck', window.scrollY > 6);
-});
+  if (tb) tb.classList.toggle('stuck', y > 6);
+  // The tab bar tucks in on the way down and comes back on the way up.
+  if (y < 40) document.body.classList.remove('nav-min');
+  else if (Math.abs(y - lastY) > 6) document.body.classList.toggle('nav-min', y > lastY);
+  lastY = y;
+}, { passive: true });
+// Static markup names its icons; fill them in once.
+$$('[data-ic]').forEach(el => { el.outerHTML = ic(el.dataset.ic); });
 
 /* ============================================================
    Receipt photos and plain-English descriptions
@@ -4587,7 +4856,7 @@ function showAiBar(){
   bar.style.gridTemplateColumns = AI_ON ? '1fr 1fr 1fr' : '1fr 1fr';
   $('#btnSay').style.display = AI_ON ? '' : 'none';
   const left = IMP && IMP.items ? IMP.items.filter(i => i.status === 'todo').length : 0;
-  $('#btnImport').textContent = left ? `🏦 Continue (${left})` : '🏦 Statement';
+  $('#btnImport').innerHTML = ic('bank') + (left ? ` Continue (${left})` : ' Statement');
 }
 
 async function checkAi(){
@@ -5043,8 +5312,9 @@ document.addEventListener('click', e => {
 
 function renderProjectHeader(){
   const p = activeProject();
+  applyAccent();
   if (!p){ $('#projName').innerHTML = 'Trip Split'; $('#projMeta').textContent = ''; return; }
-  $('#projName').innerHTML = esc(p.name) + '<span style="font-size:15px;opacity:.5;margin-left:6px">⌄</span>';
+  $('#projName').innerHTML = esc(p.name) + ic('chevd', 'pchev');
   const bits = [projectDates(p)];
   if (p.cities && p.cities.length) bits.push(p.cities.length > 2 ? p.cities.length + ' places' : p.cities.join(' · '));
   const cur = pCurrencies();
@@ -5082,6 +5352,7 @@ function openProjectEditor(id){
   // "everyone, including people added later", which let trip friends leak into
   // household projects and the reverse; it is read as today's roster.)
   PE.memTouched = false;
+  PE.accent = p ? accentIndex(p) : null;
   PE.newPeople = [];
   PE.members = (PE.members && PE.members.length) ? PE.members.slice() : (p ? S.people.slice() : S.people.slice());
   PE.origMembers = p ? PE.members.slice() : [];
@@ -5101,6 +5372,8 @@ function renderProjectEditor(){
   $('#peDates').style.display = PE.kind === 'dated' ? '' : 'none';
   $$('#peKind button').forEach(b => b.classList.toggle('on', b.dataset.kind === PE.kind));
 
+  $('#peAccent').innerHTML = ACCENTS.map((a, i) =>
+    `<button class="swatch ${PE.accent === i ? 'on' : ''}" data-peaccent="${i}" aria-label="Colour ${i + 1}" style="--sw-l:${a[0]};--sw-d:${a[1]}"></button>`).join('');
   $('#peCur').innerHTML = CURS().map(c =>
     `<button class="chip ${PE.currencies.includes(c)?'on':''}" data-pecur="${c}">${c}</button>`).join('');
 
@@ -5198,6 +5471,8 @@ function saveProject(){
     enqueue('addProject', rec);
     setActiveProject(rec.id);
   }
+  // The colour is this phone's own choice; it never leaves it.
+  if (Number.isInteger(PE.accent)){ PREFS.accent = Object.assign({}, PREFS.accent, { [rec.id]: PE.accent }); save(K_PREFS, PREFS); }
   PE = null;
   persist(); renderAll(); closeSheet('projEdit');
   toast('Project saved');

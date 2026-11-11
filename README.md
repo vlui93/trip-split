@@ -147,7 +147,7 @@ from the link used, never by the phone. To move the group over:
 
 1. Make a full-access link for each of you, yourself included.
 2. Each person opens their own link on their phone. In the home-screen app,
-   they paste it into the Connect screen. Check that Settings → Recent changes
+   they paste it into the Connect screen. Check that History → Activity
    shows "You're using …'s own link".
 3. Once everyone is switched, run `resetToken()` in the script editor if you want
    the old shared link to stop working. Do this last: a phone still on the main
@@ -168,6 +168,22 @@ Optional AI keys are stored in the script's properties, on Google's side. They
 never reach the phone or this repository.
 
 ## Using it
+
+### Layout
+
+- **Home** leads with your own number ("You owe A$114.00", and who to pay),
+  then everyone's balance, then the latest expenses. Things that need a look
+  show as a row of pills under it; the first pill opens the full list.
+- **Adding an expense** is the amount, what it was for, and one line each for
+  who paid, the split, category, date, place and repeat. Each line shows the
+  current choice; tap it only to change it.
+- **The tab bar** floats over the content and tucks in as you scroll down. The
+  **+** sits beside it.
+- **Colour.** Each project has its own accent colour; change it in the project's
+  settings. It is kept on that phone only.
+- Glass (blur) is used for the controls that float over content, never for the
+  content. With *Reduce Transparency* on, or in a browser without blur, they are
+  solid. Pinch to zoom works everywhere.
 
 ### Projects
 
@@ -228,7 +244,7 @@ add back to the total exactly.
 
 ### History
 
-The home screen's recent list (the latest two months), History and the
+The home screen's recent list (the latest eight), History and the
 settlement log are grouped by month, newest first, each with its count and
 total. Tap a month to fold it, or use **Collapse all** / **Expand all**. What's
 folded is remembered on that phone, per project.
@@ -285,8 +301,8 @@ The PDF reader is part of the offline download (**More → Connection**, now abo
 
 ### Excel export and the Report tab
 
-**In the app:** History filters by place, person, category and a date range.
-**Download Excel of these results** saves exactly what's filtered as an `.xlsx`
+**In the app:** History has a search box and one row of filter pills: person,
+category, place and dates. The download button at the top of History saves exactly what's filtered as an `.xlsx`
 file. On an iPhone it opens the share sheet, so you can Save to Files, Mail or
 AirDrop it. It's built on the phone, so it works offline. The workbook has four sheets:
 
@@ -314,7 +330,7 @@ amount_aud 120 → 130"), and the item before and after as JSON. That means a
 deleted expense can always be found again. A phone re-sending something that
 already landed is not recorded, so the log isn't cluttered with retries. Invite
 links appear only as their first six characters. Full-access phones show the
-newest 40 entries under **Settings → Recent changes**.
+newest 40 entries under **History → Activity**.
 
 ### Needs attention
 
@@ -358,7 +374,7 @@ one batch, and restoring the project brings the batch back.
 
 - **Undo:** right after deleting an expense or undoing a settlement, the
   message at the bottom of the screen has **Undo** for a few seconds.
-- **Settings → Recently deleted** on a full-access phone lists everything
+- **History → Activity** on a full-access phone lists everything
   deleted and not yet restored, each with **Restore**.
 - A restored expense keeps "added by" as whoever first added it. The row stays
   in the Deleted tab, stamped with who restored it and when, and the restore is
