@@ -4,7 +4,8 @@ import { readFileSync } from 'node:fs';
 import assert from 'node:assert/strict';
 
 const html = readFileSync(new URL('../index.html', import.meta.url), 'utf8');
-const src = html.slice(html.indexOf('/* cats:start'), html.indexOf('/* cats:end */'));
+const shared = readFileSync(new URL('../shared.js', import.meta.url), 'utf8');
+const src = shared + '\n' + html.slice(html.indexOf('/* cats:start'), html.indexOf('/* cats:end */'));
 const { guessCategory, breakdown, slices, CATS } =
   new Function(src + '; return { guessCategory, breakdown, slices, CATS };')();
 

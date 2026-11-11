@@ -370,7 +370,7 @@ body.guest .owner-only{display:none !important}
 
 <!-- ============ SETUP ============ -->
 <section id="s-setup" class="screen">
-  <div class="topbar"><h1>Connect</h1></div>
+  <div class="topbar"><h1 class="grow">Connect</h1><button class="btn sm ghost" id="setupBack" style="display:none">Back</button></div>
   <p class="sub">Paste the Web App URL and token from your Apps Script deployment. They are stored only on this device — nothing is committed to the public repo.</p>
   <p class="sub"><b>Got an invite link?</b> Paste the whole link into the first box and leave the token empty.</p>
   <div class="card stack">
@@ -918,6 +918,7 @@ body.guest .owner-only{display:none !important}
 
 <div class="ptr" id="ptr"><div class="ring"></div></div>
 <div class="toast" id="toast"></div>
+<script src="shared.js"></script>
 <script>
 "use strict";
 /* ============================================================
@@ -1157,67 +1158,9 @@ function rateMeta(cur){
 }
 function today(){ const d=new Date(); return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0'); }
 
-/** Split `totalC` cents across `weights` ({name:weight}) so the parts sum exactly. */
-function allocate(totalC, weights){
-  const names = Object.keys(weights).filter(n => Number(weights[n]) > 0);
-  const out = {};
-  if (!names.length){
-    const all = Object.keys(weights);
-    if (!all.length) return out;
-    const base = Math.floor(totalC/all.length);
-    all.forEach((n,i) => out[n] = base + (i < totalC - base*all.length ? 1 : 0));
-    return out;
-  }
-  const sum = names.reduce((a,n) => a + Number(weights[n]), 0);
-  let used = 0;
-  const frac = [];
-  names.forEach(n => {
-    const raw = Number(weights[n]) / sum * totalC;
-    const fl  = Math.floor(raw);
-    out[n] = fl; used += fl; frac.push([n, raw - fl]);
-  });
-  frac.sort((a,b) => b[1] - a[1]);
-  let left = totalC - used;
-  for (let i = 0; left > 0; i++, left--) out[frac[i % frac.length][0]]++;
-  return out;
-}
-
-/** Per-person share of one expense, in AUD cents. Always sums to amount_aud. */
+/** Per-person share of one expense, in AUD cents. Always sums to amount_aud. (The maths is in shared.js.) */
 function sharesOf(ex){
-  const totalC = cents(ex.amount_aud);
-  const people = pPeople().length ? pPeople() : S.people;
-  const d = ex.split_detail || {};
-  let weights = {};
-
-  if (ex.split_type === 'exact' || ex.split_type === 'percent'){
-    const sh = d.shares || {};
-    Object.keys(sh).forEach(n => { if (Number(sh[n]) > 0) weights[n] = Number(sh[n]); });
-  } else if (ex.split_type === 'itemized'){
-    const pack = ex.items || {};
-    const items = pack.items || [];
-    const per = {};
-    let itemsTotal = 0;
-    items.forEach(it => {
-      const amt = Number(it.amount) || 0;
-      const who = (it.people || []).filter(Boolean);
-      if (!amt || !who.length) return;
-      itemsTotal += amt;
-      who.forEach(n => per[n] = (per[n] || 0) + amt / who.length);
-    });
-    const extra = Number(pack.extra) || 0;
-    if (extra && itemsTotal > 0){
-      Object.keys(per).forEach(n => per[n] += extra * (per[n] / itemsTotal));
-    } else if (extra){
-      const who = Object.keys(per).length ? Object.keys(per) : people;
-      who.forEach(n => per[n] = (per[n] || 0) + extra / who.length);
-    }
-    weights = per;
-  } else {
-    const parts = (d.participants && d.participants.length) ? d.participants : people;
-    parts.forEach(n => weights[n] = 1);
-  }
-  if (!Object.keys(weights).length) people.forEach(n => weights[n] = 1);
-  return allocate(totalC, weights);
+  return sharesFor(ex, pPeople().length ? pPeople() : S.people);
 }
 
 /* ============================================================
@@ -1407,6 +1350,8 @@ function replayQueue(){
       if (p.currency && p.currency !== BASE) S.personCur[p.name] = p.currency; else delete S.personCur[p.name];
     }
     else if (a === 'createInvite') upsertBy(S.invites = S.invites || [], p, 'token');
+    else if (a === 'retireMainLink') S.mainLink = 'off';
+    else if (a === 'restoreMainLink') S.mainLink = 'on';
     else if (a === 'revokeInvite'){
       S.invites = (S.invites || []).map(i => i.token === p.token ? Object.assign({}, i, { revoked:true }) : i);
     }
@@ -1460,7 +1405,7 @@ function applyBootstrap(d){
         // rules rather than replacing them with nothing.
         recurring: Array.isArray(d.recurring) ? d.recurring : (S.recurring || []),
         personCur: d.personCur || {}, invites: d.invites || [], guest: d.guest || null,
-        whoami: d.whoami || null, changes: d.changes || [], deleted: d.deleted || [],
+        whoami: d.whoami || null, changes: d.changes || [], deleted: d.deleted || [], mainLink: d.mainLink || '',
         serverDate:d.serverDate||'' };
   // On someone's own link, "you" is whoever the link is for.
   const mine = (S.whoami && S.whoami.person) || (S.guest && S.guest.person);
@@ -1557,6 +1502,7 @@ function go(name){
   $$('.nav button[data-go]').forEach(b => b.classList.toggle('on', b.dataset.go === name));
   document.body.classList.toggle('setup', name === 'setup');      // nothing to navigate to before connecting
   window.scrollTo(0,0);
+  if (name === 'setup') $('#setupBack').style.display = CFG && CFG.url ? '' : 'none';   // switching links, not starting out
   if (name === 'history') renderHistory();
   if (name === 'settle')  renderSettle();
   if (name === 'more')    renderMore();
@@ -1598,12 +1544,15 @@ function renderSync(){
     return;
   }
   if (old){ el.innerHTML = old; return; }
+  // This phone's link no longer works: say how to carry on. Nothing waiting is lost.
+  const relink = /retired|turned off/i.test(lastSyncErr)
+    ? `<div style="margin-top:8px"><button class="btn sm ghost" id="useOwnLink">Connect with my own link</button></div>` : '';
   if (q && lastSyncErr){
-    el.innerHTML = `<div class="banner warn"><span class="dot pend"></span><div><b>${q} change${q>1?'s':''} waiting to sync.</b> ${esc(lastSyncErr)}</div></div>`;
+    el.innerHTML = `<div class="banner warn"><span class="dot pend"></span><div><b>${q} change${q>1?'s':''} waiting to sync.</b> ${esc(lastSyncErr)}${relink}</div></div>`;
   } else if (q){
     el.innerHTML = `<div class="banner warn"><span class="dot pend"></span><div>${q} change${q>1?'s':''} queued — pushing to the Sheet.</div></div>`;
   } else if (lastSyncErr){
-    el.innerHTML = `<div class="banner bad"><span class="dot bad"></span><div>${esc(lastSyncErr)}</div></div>`;
+    el.innerHTML = `<div class="banner bad"><span class="dot bad"></span><div>${esc(lastSyncErr)}${relink}</div></div>`;
   } else {
     el.innerHTML = '';
   }
@@ -1765,7 +1714,7 @@ function dayBadge(d){
   return parts.length === 3 ? String(Number(parts[2])) : '·';
 }
 function splitLabel(t){
-  return ({ equal:'equal', exact:'exact', percent:'%', itemized:'itemized' })[t] || t;
+  return SPLIT_LABELS[t] || t;
 }
 
 /* ---------------- render: history ---------------- */
@@ -2793,16 +2742,7 @@ function exportWorkbook(d){
 /* ---------------- categories and the spending breakdown ---------------- */
 
 /* cats:start — pure functions, exercised by tests/breakdown.test.mjs */
-const CATS = [
-  { id:'food',       label:'Food & drink', ico:'food' },
-  { id:'transport',  label:'Transport',    ico:'transport' },
-  { id:'stay',       label:'Stay',         ico:'stay' },
-  { id:'activities', label:'Activities',   ico:'activities' },
-  { id:'shopping',   label:'Shopping',     ico:'shopping' },
-  { id:'groceries',  label:'Groceries',    ico:'groceries' },
-  { id:'bills',      label:'Bills',        ico:'bills' },
-  { id:'other',      label:'Other',        ico:'other' },
-];
+// CATS itself is in shared.js, which the Sheet's script uses too.
 const catOf = id => CATS.find(c => c.id === id) || null;
 
 // Checked in this order, so "train tickets" is transport and "7-Eleven snacks" groceries.
@@ -3595,6 +3535,7 @@ function renderMore(){
   renderChanges();
   renderDeleted();
 
+  $('#meBox').style.display = linkPerson() ? 'none' : '';      // your own link already says who you are
   $('#meBox').innerHTML =
     `<label class="fl">Which one is you?</label>
      <div class="chips">${S.people.map(p =>
@@ -4274,7 +4215,43 @@ function renderInvites(){
       <button class="btn sm ghost" data-invlink="${esc(i.token)}">Link</button>
       <button class="iconbtn" data-invoff="${esc(i.token)}" title="Turn off">${ic('x')}</button>
     </div>`).join('')
-    + `<button class="btn ghost full sm" id="invNew">+ Invite someone</button>`;
+    + `<button class="btn ghost full sm" id="invNew">+ Invite someone</button>` + mainLinkBox();
+}
+
+/** Under the links: whether the shared main link still works, and the way to retire it. */
+function mainLinkBox(){
+  if (!S.mainLink) return '';                      // a backend from before this existed
+  const role = S.whoami && S.whoami.role;
+  const linked = (S.invites || []).filter(i => !i.revoked && i.role === 'member').map(i => i.person);
+  const without = (S.people || []).filter(n => !linked.includes(n) && !(S.invites || []).some(i => !i.revoked && i.person === n));
+  const note = t => `<div style="font-size:12.5px;color:var(--muted);margin-top:6px">${t}</div>`;
+  let body;
+  if (S.mainLink === 'off'){
+    body = `<div style="font-weight:650">The shared main link is retired</div>
+      ${note('Every change now carries a name. Only personal links open the app.')}
+      <button class="btn ghost full sm" id="mainOn" style="margin-top:10px">Bring the main link back</button>`;
+  } else if (role === 'member'){
+    body = `<div style="font-weight:650">The shared main link still works</div>
+      ${note('Changes made with it are recorded as “Main link”, not as a person. Once everyone opens the app with their own link, retire it. You can bring it back from here at any time.')}
+      ${without.length ? note('<b>No link yet:</b> ' + esc(without.join(', ')) + '. They would be locked out.') : ''}
+      <button class="btn danger full sm" id="mainOff" style="margin-top:10px">Retire the main link</button>`;
+  } else {
+    body = `<div style="font-weight:650">You’re on the shared main link</div>
+      ${note('Make a full-access link for each of you, open your own, and retire this one from there. Then every change carries a name.')}`;
+  }
+  return `<div style="border-top:1px solid var(--line);margin-top:4px;padding-top:12px">${body}</div>`;
+}
+function setMainLink(on){
+  if (!on){
+    const others = (S.invites || []).filter(i => !i.revoked && i.role === 'member' && i.person !== linkPerson()).map(i => i.person);
+    if (!confirm('Retire the shared main link?\n\nAnyone still using it will be asked for their own link. '
+               + (others.length ? 'Full-access links: you, ' + others.join(', ') + '.' : 'Yours is the only full-access link.')
+               + '\n\nYou can bring it back from this screen.')) return;
+  }
+  S.mainLink = on ? 'on' : 'off';
+  enqueue(on ? 'restoreMainLink' : 'retireMainLink', {});
+  persist(); renderMore();
+  toast(on ? 'The main link works again' : 'Main link retired');
 }
 
 function openInvite(){
@@ -4536,6 +4513,10 @@ document.addEventListener('click', e => {
   if (e.target.id === 'addPerson'){ ensurePED(); PED.push({ orig:null, val:'' }); renderMore(); }
   if (e.target.id === 'cancelPeople'){ PED = null; renderMore(); toast('Changes discarded'); }
   if (e.target.id === 'invNew') openInvite();
+  if (e.target.id === 'useOwnLink'){ $('#cfgUrl').value = ''; $('#cfgToken').value = ''; $('#setupMsg').innerHTML = ''; go('setup'); return; }
+  if (e.target.id === 'setupBack'){ go('home'); return; }
+  if (e.target.id === 'mainOff') setMainLink(false);
+  if (e.target.id === 'mainOn') setMainLink(true);
   if (e.target.id === 'chAll'){ CH_ALL = true; renderChanges(); return; }
   if (e.target.closest('#attnAll')){ openSheet('attnSheet'); renderAttention(); return; }
   const at = e.target.closest('[data-attn],[data-attnoff]');
@@ -4805,10 +4786,13 @@ $('#cfgSave').addEventListener('click', async () => {
   try {
     const d = await call('bootstrap', {}, { refreshRates:true });
     applyBootstrap(d);
+    replayQueue();                 // changes still waiting from the previous link come along
     autoPickProject();
     save(K_CFG, CFG); persist();
     $('#setupMsg').innerHTML = '';
+    lastSyncErr = '';
     renderAll(); go('home'); toast('Connected'); checkAi();
+    if (QUEUE.length) retryFailed();
   } catch(err){
     CFG = prev;
     $('#setupMsg').innerHTML = `<div class="banner bad">${esc(err.message)}</div>`;

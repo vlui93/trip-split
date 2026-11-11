@@ -22,8 +22,7 @@ var SHEET_ACCESS      = 'Access';
 var SHEET_CHANGES     = 'Changes';
 var SHEET_DELETED     = 'Deleted';
 
-// Quick categories for the spending breakdown. Blank means not chosen yet.
-var CATEGORIES = ['food', 'transport', 'stay', 'activities', 'shopping', 'groceries', 'bills', 'other'];
+// Quick categories for the spending breakdown (the list is in shared.js). Blank means not chosen yet.
 function category(c) { c = String(c || '').toLowerCase(); return CATEGORIES.indexOf(c) >= 0 ? c : ''; }
 
 // Only the starting set. The ExchangeRates tab is the real list from then on,
@@ -32,7 +31,7 @@ var DEFAULT_CURRENCIES = ['AUD'];
 
 // Bump when the app starts relying on something new here. The app compares it and
 // says "redeploy" in plain words instead of failing on an unknown action.
-var API_VERSION = 10;
+var API_VERSION = 11;
 
 /** Every currency the sheet knows about. AUD is always first and always present. */
 function CURRENCIES() {
@@ -232,12 +231,18 @@ function doPost(e) {
 
 function handle(e, req) {
   // Which backend is live: no token needed, and it says nothing else.
-  if (String(req.action || '') === 'version') return json({ ok: true, apiVersion: API_VERSION });
+  var shared = typeof sharesFor === 'function';
+  if (String(req.action || '') === 'version') return json({ ok: true, apiVersion: API_VERSION, shared: shared });
+  if (!shared) return json({ ok: false, error: 'The Sheet\'s script is missing shared.js. Add it as a second script file next to Code.gs (see the README).' });
   var expected = PropertiesService.getScriptProperties().getProperty('API_TOKEN');
   if (!expected) return json({ ok: false, error: 'Backend not set up — run setup() in the script editor.' });
   var who = principal(String(req.token || ''), expected);
   if (!who) return json({ ok: false, error: 'Bad token' });
   if (who.revoked) return json({ ok: false, error: 'This invite link has been turned off. Ask for a new one.' });
+  // Once everyone has a link of their own, the shared one can be switched off.
+  if (who.owner && !who.member && mainLinkOff()) {
+    return json({ ok: false, mainLinkOff: true, error: 'The shared main link has been retired. Open the app with your own link.' });
+  }
 
   var action  = String(req.action || 'bootstrap');
   var payload = req.payload || {};
@@ -339,6 +344,8 @@ function ownerAction(who, action, payload, req) {
     case 'setPersonCurrency': out = { personCur: setPersonCurrency(payload.name, payload.currency) }; break;
     case 'createInvite': out = { invite: createInvite(payload) }; break;
     case 'revokeInvite': out = { invite: revokeInvite(payload.token) }; break;
+    case 'retireMainLink':  out = { mainLink: setMainLink(who, false) }; break;
+    case 'restoreMainLink': out = { mainLink: setMainLink(who, true) }; break;
     case 'setRate':      out = { rates: setRate(payload.currency, payload.rate_to_aud) }; break;
     case 'addCurrency':  out = { rates: addCurrency(payload.currency) }; break;
     case 'removeCurrency': out = { rates: removeCurrency(payload.currency) }; break;
@@ -356,6 +363,7 @@ function ownerAction(who, action, payload, req) {
   }
   if (action === 'bootstrap') {
     out.whoami = { person: who.person || '', role: who.member ? 'member' : 'main' };
+    out.mainLink = mainLinkOff() ? 'off' : 'on';
     out.changes = recentChanges(40);
     out.deleted = recentlyDeleted(50);
   }
@@ -1051,12 +1059,14 @@ var CHANGE_TYPES = {
   addRecurring: 'recurring', updateRecurring: 'recurring', deleteRecurring: 'recurring',
   restoreDeleted: 'restore',
   setPeople: 'people', setPersonCurrency: 'person', setRate: 'rate', clearOverride: 'rate',
-  addCurrency: 'rate', removeCurrency: 'rate', createInvite: 'invite', revokeInvite: 'invite'
+  addCurrency: 'rate', removeCurrency: 'rate', createInvite: 'invite', revokeInvite: 'invite',
+  retireMainLink: 'mainlink', restoreMainLink: 'mainlink'
 };
 
 function changeKey(action, p) {
   var t = CHANGE_TYPES[action];
   if (t === 'people') return 'people';
+  if (t === 'mainlink') return 'main link';
   if (t === 'person') return String(p.name || '');
   if (t === 'rate') return String(p.currency || '').toUpperCase();
   if (t === 'invite') return String(p.token || '');
@@ -1074,6 +1084,7 @@ function changeSnapshot(action, p) {
   if (t === 'project') return getProjects().filter(function (x) { return x.id === k; })[0] || null;
   if (t === 'recurring') return getRecurring().filter(function (x) { return x.id === k; })[0] || null;
   if (t === 'people') return { people: getPeople() };
+  if (t === 'mainlink') return { mainLink: mainLinkOff() ? 'off' : 'on' };
   if (t === 'person') return { name: k, currency: personCurrencies()[k] || 'AUD' };
   if (t === 'rate') return readRates()[k] || null;
   if (t === 'invite') {
@@ -1119,6 +1130,7 @@ function changeSummary(t, action, b, a, p) {
   if (t === 'person') return o.name + ' now settles in ' + o.currency;
   if (t === 'rate') return (!a ? 'Removed currency ' + (b && b.currency) : !b ? 'Added currency ' + a.currency
                             : 'Rate for ' + a.currency + ': ' + (b.rate_to_aud ? (1 / b.rate_to_aud).toFixed(4) : '—') + ' → ' + (a.rate_to_aud ? (1 / a.rate_to_aud).toFixed(4) : '—') + ' per AUD' + (a.is_manual_override ? ' (manual)' : ''));
+  if (t === 'mainlink') return a && a.mainLink === 'off' ? 'Retired the shared main link' : 'Brought back the shared main link';
   if (t === 'invite') return (action === 'revokeInvite' ? 'Turned off the link for ' : 'Made a ' + (o.role === 'member' ? 'full-access' : 'guest') + ' link for ') + o.person;
   return action;
 }
@@ -1246,9 +1258,8 @@ function recentChanges(n) {
 
 var SHEET_REPORT  = 'Report';
 var SHEET_SUMMARY = 'Summary';
-var CAT_LABELS = { food: 'Food & drink', transport: 'Transport', stay: 'Stay', activities: 'Activities',
-                   shopping: 'Shopping', groceries: 'Groceries', bills: 'Bills', other: 'Other' };
-var SPLIT_LABELS = { equal: 'equal', exact: 'exact', percent: '%', itemized: 'itemized' };
+// Category and split labels, and the share maths, come from shared.js: the same
+// file the app loads, so the Report can't disagree with the phone.
 
 function onOpen() {
   try {
@@ -1272,59 +1283,6 @@ function afterRequest(action) {
     markReportDirty();
     bumpRev();
   }
-}
-
-/** Split totalC cents by weights so the parts sum exactly — the app's allocate(), line for line. */
-function allocateCents(totalC, weights) {
-  var names = Object.keys(weights).filter(function (n) { return Number(weights[n]) > 0; });
-  var out = {};
-  if (!names.length) {
-    var all = Object.keys(weights);
-    if (!all.length) return out;
-    var base = Math.floor(totalC / all.length);
-    all.forEach(function (n, i) { out[n] = base + (i < totalC - base * all.length ? 1 : 0); });
-    return out;
-  }
-  var sum = names.reduce(function (a, n) { return a + Number(weights[n]); }, 0);
-  var used = 0, frac = [];
-  names.forEach(function (n) {
-    var raw = Number(weights[n]) / sum * totalC, fl = Math.floor(raw);
-    out[n] = fl; used += fl; frac.push([n, raw - fl]);
-  });
-  frac.sort(function (a, b) { return b[1] - a[1]; });
-  for (var i = 0, left = totalC - used; left > 0; i++, left--) out[frac[i % frac.length][0]]++;
-  return out;
-}
-
-/** Each person's share of an expense in AUD cents — the app's sharesOf(), line for line. */
-function shareCents(ex, people) {
-  var totalC = Math.round((Number(ex.amount_aud) || 0) * 100);
-  var d = ex.split_detail || {}, weights = {};
-  if (ex.split_type === 'exact' || ex.split_type === 'percent') {
-    var sh = d.shares || {};
-    Object.keys(sh).forEach(function (n) { if (Number(sh[n]) > 0) weights[n] = Number(sh[n]); });
-  } else if (ex.split_type === 'itemized') {
-    var pack = ex.items || {}, items = pack.items || [], per = {}, itemsTotal = 0;
-    items.forEach(function (it) {
-      var amt = Number(it.amount) || 0, who = (it.people || []).filter(Boolean);
-      if (!amt || !who.length) return;
-      itemsTotal += amt;
-      who.forEach(function (n) { per[n] = (per[n] || 0) + amt / who.length; });
-    });
-    var extra = Number(pack.extra) || 0;
-    if (extra && itemsTotal > 0) {
-      Object.keys(per).forEach(function (n) { per[n] += extra * (per[n] / itemsTotal); });
-    } else if (extra) {
-      var w = Object.keys(per).length ? Object.keys(per) : people;
-      w.forEach(function (n) { per[n] = (per[n] || 0) + extra / w.length; });
-    }
-    weights = per;
-  } else {
-    var parts = (d.participants && d.participants.length) ? d.participants : people;
-    parts.forEach(function (n) { weights[n] = 1; });
-  }
-  if (!Object.keys(weights).length) people.forEach(function (n) { weights[n] = 1; });
-  return allocateCents(totalC, weights);
 }
 
 function colLetter(i) {
@@ -1354,7 +1312,7 @@ function rebuildReport() {
   var shares = expenses.map(function (ex) {
     var p = byId[ex.project_id];
     var members = (p && p.members && p.members.length) ? p.members.filter(function (n) { return everyone.indexOf(n) >= 0; }) : everyone;
-    return shareCents(ex, members.length ? members : everyone);
+    return sharesFor(ex, members.length ? members : everyone);
   });
   var people = everyone.slice();
   expenses.forEach(function (ex, i) {
@@ -1365,12 +1323,11 @@ function rebuildReport() {
               'Amount', 'Rate (per 1 AUD)', 'Amount (AUD)']
     .concat(people.map(function (p) { return 'Share: ' + p; }), ['Shares total', 'ID', 'Added by', 'Changed by', 'Changed at']);
   var rows = expenses.map(function (ex, i) {
-    var rate = ex.currency === 'AUD' ? 1 : (ex.amount_aud > 0 ? ex.amount_local / ex.amount_aud : 0);
     var sh = shares[i], tot = 0;
     var per = people.map(function (p) { tot += sh[p] || 0; return (sh[p] || 0) / 100; });
     return [ex.date, String(ex.date).slice(0, 7), (byId[ex.project_id] || {}).name || '', ex.city,
             CAT_LABELS[ex.category] || 'Not set', ex.description, ex.paid_by, SPLIT_LABELS[ex.split_type] || ex.split_type,
-            ex.currency, ex.amount_local, Math.round(rate * 1e4) / 1e4, ex.amount_aud]
+            ex.currency, ex.amount_local, expenseRate(ex), ex.amount_aud]
       .concat(per, [tot / 100, ex.id, ex.created_by, ex.updated_by, ex.updated_at]);
   });
 
@@ -1508,6 +1465,39 @@ function getInvites() {
 }
 
 /** The phone makes the token, so an invite can be created offline. Upsert by token. */
+/* ------------------------------------------------------------------ *
+ * Retiring the shared main link
+ *
+ * The main link (the API token) is the one everybody used before personal
+ * links existed. Changes made with it are recorded as "Main link", not as a
+ * person. Once each of you has a full-access link, it can be switched off, and
+ * back on again, from any full-access link. From the script editor,
+ * restoreMainLink() always brings it back.
+ * ------------------------------------------------------------------ */
+
+function mainLinkOff() {
+  return PropertiesService.getScriptProperties().getProperty('MAIN_LINK') === 'off';
+}
+
+function fullAccessLinks() {
+  return readRows(SHEET_ACCESS).filter(function (r) { return String(r.role) === 'member' && !isTrue(r.revoked); })
+    .map(function (r) { return { token: String(r.token), person: String(r.person) }; });
+}
+
+function setMainLink(who, on) {
+  if (!who || !who.member) throw new Error('Open the app with your own link first: the main link can only be retired from a personal one.');
+  var props = PropertiesService.getScriptProperties();
+  if (on) props.deleteProperty('MAIN_LINK'); else props.setProperty('MAIN_LINK', 'off');
+  return on ? 'on' : 'off';
+}
+
+/** Run from the script editor if every personal link is lost. */
+function restoreMainLink() {
+  PropertiesService.getScriptProperties().deleteProperty('MAIN_LINK');
+  Logger.log('The shared main link works again. showToken() prints it.');
+  return 'on';
+}
+
 function createInvite(p) {
   var token = String(p.token || '');
   if (!/^[a-f0-9]{32}$/.test(token)) throw new Error('Bad invite token.');
@@ -1526,6 +1516,11 @@ function createInvite(p) {
 function revokeInvite(token) {
   var r = findRowById(SHEET_ACCESS, String(token || ''));
   if (r < 0) return null;                         // never synced: nothing to turn off
+  // With the main link retired, the last full-access link is the only way in.
+  var live = fullAccessLinks();
+  if (mainLinkOff() && live.length === 1 && live[0].token === String(token)) {
+    throw new Error('That is the last full-access link, and the main link is retired. Bring the main link back first.');
+  }
   sheet(SHEET_ACCESS).getRange(r, 5).setValue(true);
   return getInvites().filter(function (i) { return i.token === token; })[0];
 }
