@@ -55,6 +55,7 @@ await t('a phone still on it is told, keeps its changes, and carries on with its
   await M.click('#useOwnLink');
   assert.equal(await M.locator('#s-setup.on').count(), 1);
   assert.equal(await M.locator('#setupBack').isVisible(), true);
+  await M.click('#showManual');
   await M.fill('#cfgUrl', link); await M.click('#cfgSave');
   await M.waitForSelector('#s-home.on'); await M.settle();
   assert.equal(await M.evaluate(() => S.whoami.person), 'Sam');

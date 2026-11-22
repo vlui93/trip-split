@@ -118,7 +118,8 @@ the editor to approve it.
 ### 3. Connect a phone
 
 Open the live app in Safari, paste the `/exec` URL and the token, and tap
-**Connect**. To install it: **Share → Add to Home Screen**.
+**Connect** (the URL and token are behind *Setting up a new Sheet?*). To install
+it: **Share → Add to Home Screen**; the icon opens already connected.
 
 Everyone in the group connects with the same URL and token. Each phone then
 picks **More → Which one is you?**, which only sets the default payer and
@@ -148,8 +149,8 @@ expense's "Added by" and "Last changed" fields. Those are set by the server
 from the link used, never by the phone. To move the group over:
 
 1. Make a full-access link for each of you, yourself included.
-2. Each person opens their own link on their phone. In the home-screen app,
-   they paste it into the Connect screen. Check that History → Activity
+2. Each person opens their own link on their phone and adds it to the home
+   screen (see *Inviting someone*). Check that History → Activity
    shows "You're using …'s own link".
 3. Once everyone is switched, retire the shared link: on your own link, open
    **More → Links and invites → Retire the main link**. From then on the old
@@ -421,11 +422,18 @@ in the currency of the one who's owed.
 
 **Settings → Invites → Invite someone.** Pick the person (or add someone new),
 the projects they can see and the currency they settle in. Then send them the
-link privately. Opening it connects their phone. On an iPhone they then tap
-Share → Add to Home Screen, open the app from there, and paste the same link into
-the Connect screen's first box. Home-screen apps don't share storage with Safari,
-which is why the link is needed twice. The link is created on your phone, so it
-works once your phone has synced.
+link privately. Opening it connects their phone. They then tap **Share → Add to
+Home Screen**, and the icon opens already connected: while a phone is connected
+in the browser, its own link stays in the address bar and in the start address
+the icon is saved with. That works for your own phone too, however it was
+connected.
+
+If an icon ever opens on the Connect screen instead (home-screen apps keep their
+own storage, apart from Safari), tap **Copy my link** on the tip on Home in
+Safari, then **Paste my link** in the home-screen app. A home-screen icon uses
+its saved link only once: after **Disconnect** or a switch to another link, it
+doesn't reconnect by itself. The link is created on your phone, so it works once
+your phone has synced.
 
 ### Recurring
 

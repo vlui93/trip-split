@@ -39,12 +39,21 @@ export async function setup(){
   const errors = [];
 
   /** A phone: its own storage, connected with `token` (or opened at `link`). */
-  async function phone({ token, link, dialogs, oldBackend } = {}){
-    const c = await browser.newContext({ viewport: { width: 390, height: 844 }, deviceScaleFactor: 2 });
+  /**
+   * `standalone` opens it as the home-screen app would; `raw` just loads `link`
+   * (or the site) and returns, connected or not; `context` reuses one phone's
+   * storage, as two tabs of the same browser would.
+   */
+  async function phone({ token, link, dialogs, oldBackend, standalone, raw, context } = {}){
+    const c = context || await browser.newContext({ viewport: { width: 390, height: 844 }, deviceScaleFactor: 2 });
+    if (!context){
+      await c.grantPermissions(['clipboard-read', 'clipboard-write'], { origin: site.replace(/\/$/, '') });
+      if (standalone) await c.addInitScript(() => Object.defineProperty(navigator, 'standalone', { get: () => true }));
+    }
     const requests = [];      // every action this phone sent, in order
     let down = false;
     const batches = [];       // what each one-request sync carried
-    await c.route('https://script.google.com/**', r => {
+    if (!context) await c.route('https://script.google.com/**', r => {
       if (down) return r.abort('internetdisconnected');
       const body = r.request().postData() || '{}';
       const req = JSON.parse(body);
@@ -63,13 +72,16 @@ export async function setup(){
     p.offline = async on => { down = on; if (!on) await p.evaluate(() => window.dispatchEvent(new Event('online'))); };
     p.on('pageerror', e => errors.push(e.message));
     p.on('dialog', d => (dialogs ? dialogs(d) : d.accept()));
-    if (link){ await p.goto(link.replace(/^https?:\/\/[^/]+\//, site)); }
+    p.local = u => u.replace(/^https?:\/\/[^/]+\//, site);
+    p.settle = () => p.waitForFunction(() => !syncing && QUEUE.length === 0, null, { timeout: 20000 });
+    if (raw){ await p.goto(link ? p.local(link) : site); return p; }
+    if (link){ await p.goto(p.local(link)); }
     else {
       await p.goto(site);
+      await p.click('#showManual');
       await p.fill('#cfgUrl', EXEC); await p.fill('#cfgToken', token || owner); await p.click('#cfgSave');
     }
     await p.waitForSelector('#s-home.on');
-    p.settle = () => p.waitForFunction(() => !syncing && QUEUE.length === 0, null, { timeout: 20000 });
     await p.settle();
     return p;
   }
