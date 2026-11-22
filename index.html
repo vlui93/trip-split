@@ -371,6 +371,13 @@ body.guest .owner-only{display:none !important}
 <!-- ============ SETUP ============ -->
 <section id="s-setup" class="screen">
   <div class="topbar"><h1 class="grow">Connect</h1><button class="btn sm ghost" id="setupBack" style="display:none">Back</button></div>
+  <div class="card stack" id="pasteCard">
+    <div style="font-weight:650">Got your link?</div>
+    <div style="font-size:13.5px;color:var(--muted)">Copy the link you were sent (or the one from <b>Copy my link</b> in Safari), then tap below.</div>
+    <button class="btn primary full" id="pasteLink">Paste my link</button>
+  </div>
+  <button class="linkbtn" id="showManual" style="margin:2px 0 12px">Setting up a new Sheet? Enter the URL and token</button>
+  <div id="manualWrap">
   <p class="sub">Paste the Web App URL and token from your Apps Script deployment. They are stored only on this device — nothing is committed to the public repo.</p>
   <p class="sub"><b>Got an invite link?</b> Paste the whole link into the first box and leave the token empty.</p>
   <div class="card stack">
@@ -384,8 +391,9 @@ body.guest .owner-only{display:none !important}
     </div>
     <button class="btn primary full" id="cfgSave">Connect</button>
   </div>
-  <div id="setupMsg"></div>
   <p class="sub">Run <b>setup()</b> once in the Apps Script editor, deploy as a Web App (Execute as: Me · Who has access: Anyone), then run <b>showToken()</b>.</p>
+  </div>
+  <div id="setupMsg"></div>
 </section>
 
 <!-- ============ HOME ============ -->
@@ -399,6 +407,7 @@ body.guest .owner-only{display:none !important}
   </div>
 
   <div id="syncBanner"></div>
+  <div id="hsTip"></div>
   <div id="heroCard"></div>
   <div id="attnCard"></div>
 
@@ -1502,7 +1511,10 @@ function go(name){
   $$('.nav button[data-go]').forEach(b => b.classList.toggle('on', b.dataset.go === name));
   document.body.classList.toggle('setup', name === 'setup');      // nothing to navigate to before connecting
   window.scrollTo(0,0);
-  if (name === 'setup') $('#setupBack').style.display = CFG && CFG.url ? '' : 'none';   // switching links, not starting out
+  if (name === 'setup'){
+    $('#setupBack').style.display = CFG && CFG.url ? '' : 'none';   // switching links, not starting out
+    $('#manualWrap').style.display = 'none'; $('#showManual').style.display = '';
+  }
   if (name === 'history') renderHistory();
   if (name === 'settle')  renderSettle();
   if (name === 'more')    renderMore();
@@ -3557,7 +3569,7 @@ function renderMore(){
   renderOcrRow();
 }
 
-function renderAll(){ document.body.classList.toggle('guest', !!GUEST()); renderAttention(); renderProjectHeader(); renderHome(); renderRecurCard(); renderSync();
+function renderAll(){ document.body.classList.toggle('guest', !!GUEST()); renderAttention(); renderHomeScreenTip(); renderProjectHeader(); renderHome(); renderRecurCard(); renderSync();
   if ($('#s-history').classList.contains('on')) renderHistory();
   if ($('#s-settle').classList.contains('on'))  renderSettle();
   if ($('#s-more').classList.contains('on'))    renderMore();
@@ -4335,8 +4347,7 @@ function showInviteLink(inv){
   $('#invLinkText').textContent = INV_LINK;
   $('#invLinkNote').textContent = (pending ? 'It starts working once this phone has synced. ' : '')
     + `Send it to ${inv.person} privately: anyone with the link sees what they see. `
-    + 'On an iPhone they open it in Safari, tap Share → Add to Home Screen, then open the app '
-    + 'from the home screen and paste the same link into the Connect screen.';
+    + 'They open it in Safari, then tap Share → Add to Home Screen; the icon opens already connected.';
   openSheet('invLinkSheet');
 }
 
@@ -4386,6 +4397,64 @@ function renderDeleted(){
 
 const standalone = () => navigator.standalone === true || matchMedia('(display-mode: standalone)').matches;
 
+/* ------------------------------------------------------------------
+   Taking your link to the home screen
+
+   On an iPhone the home-screen app keeps its own storage, apart from Safari,
+   so it used to open on the Connect screen asking for a URL and token. Now,
+   in the browser, the address bar keeps this phone's own link and the
+   manifest's start address carries it too. Whichever of the two the phone
+   uses when you Add to Home Screen, the new icon opens already connected.
+   If neither carries over, "Copy my link" then "Paste my link" does it in
+   two taps.
+   ------------------------------------------------------------------ */
+const K_LAUNCH = 'tsplit.launchJoined';   // a link the home-screen icon has already used
+let manifestUrl = '';
+function carryLinkToHomeScreen(){
+  if (standalone()) return;
+  const link = CFG && CFG.url && CFG.token ? inviteLink(CFG.token) : '';
+  const hash = link ? link.slice(link.indexOf('#')) : '';
+  if (location.hash !== hash) history.replaceState(null, '', location.pathname + location.search + hash);
+  fetch('manifest.webmanifest').then(r => r.json()).then(m => {
+    if (link){
+      const base = location.origin + location.pathname.replace(/[^/]*$/, '');
+      m.start_url = link; m.scope = base; m.id = base;
+      m.icons = (m.icons || []).map(i => Object.assign({}, i, { src: new URL(i.src, base).href }));
+    }
+    const el = document.querySelector('link[rel="manifest"]');
+    if (!el) return;
+    if (manifestUrl) URL.revokeObjectURL(manifestUrl);
+    manifestUrl = link ? URL.createObjectURL(new Blob([JSON.stringify(m)], { type: 'application/manifest+json' })) : '';
+    el.href = manifestUrl || 'manifest.webmanifest';
+  }).catch(() => {});
+}
+function copyMyLink(){
+  navigator.clipboard.writeText(inviteLink(CFG.token)).then(() => toast('Your link is copied'), () => toast("Couldn't copy"));
+}
+async function pasteMyLink(){
+  let text = '';
+  try { text = await navigator.clipboard.readText(); } catch(e){}
+  const inv = parseInvite(text);
+  if (!inv){
+    $('#setupMsg').innerHTML = `<div class="banner warn">${text ? 'That isn’t a Trip Split link.' : 'Nothing to paste.'}
+      Copy your link first, or paste it into the first box below.</div>`;
+    $('#manualWrap').style.display = ''; $('#cfgUrl').focus();
+    return;
+  }
+  $('#cfgUrl').value = text.trim(); $('#cfgToken').value = '';
+  $('#cfgSave').click();
+}
+function renderHomeScreenTip(){
+  const box = $('#hsTip');
+  if (!box) return;
+  const show = CFG && CFG.url && !standalone() && !PREFS.hsTipOff;
+  box.innerHTML = show ? `<div class="banner ok" style="flex-direction:column;gap:8px">
+      <div><b>Keep it on your home screen.</b> Tap Share, then <b>Add to Home Screen</b>. It opens already connected.
+        If it ever asks to connect, tap <b>Copy my link</b> here first, then <b>Paste my link</b> there.</div>
+      <div class="row" style="gap:8px"><button class="btn sm ghost" id="hsCopy">Copy my link</button>
+        <button class="btn sm ghost" id="hsOff">Got it</button></div></div>` : '';
+}
+
 function renderGuestBox(){
   const g = GUEST(), box = $('#guestBox');
   if (!box) return;
@@ -4397,8 +4466,8 @@ function renderGuestBox(){
       <div><div style="font-weight:650">${esc(g.person)}</div>
       <div style="font-size:13px;color:var(--muted);margin-top:4px">You can see ${esc(names)}, and only the expenses
         you're part of. You settle in ${esc(settleCur(g.person))}.</div></div>
-      ${standalone() ? '' : `<div style="font-size:13px;color:var(--muted)">To keep it on your home screen: copy your link,
-        tap Share → Add to Home Screen, open the app from there and paste the link.</div>
+      ${standalone() ? '' : `<div style="font-size:13px;color:var(--muted)">To keep it on your home screen: tap Share → Add to Home Screen.
+        It opens already connected. If it asks to connect, copy your link here and tap Paste my link there.</div>
         <button class="btn ghost full sm" id="guestCopy">Copy my invite link</button>`}
     </div>`;
 }
@@ -4581,9 +4650,10 @@ document.addEventListener('click', e => {
       rerenderFold(scope);
     }
   }
-  if (e.target.id === 'guestCopy'){
-    navigator.clipboard.writeText(inviteLink(CFG.token)).then(() => toast('Link copied'), () => toast("Couldn't copy"));
-  }
+  if (e.target.id === 'guestCopy' || e.target.id === 'hsCopy') copyMyLink();
+  if (e.target.id === 'hsOff'){ PREFS.hsTipOff = true; save(K_PREFS, PREFS); renderHomeScreenTip(); }
+  if (e.target.id === 'pasteLink') pasteMyLink();
+  if (e.target.id === 'showManual'){ $('#manualWrap').style.display = ''; e.target.style.display = 'none'; $('#cfgUrl').focus(); }
   const ib = e.target.closest('[data-invwho],[data-invproj],[data-invcur],[data-invaddcur],[data-invlink],[data-invoff],[data-invrole]');
   if (!ib) return;
   const d = ib.dataset;
@@ -4792,6 +4862,7 @@ $('#cfgSave').addEventListener('click', async () => {
     $('#setupMsg').innerHTML = '';
     lastSyncErr = '';
     renderAll(); go('home'); toast('Connected'); checkAi();
+    carryLinkToHomeScreen();
     if (QUEUE.length) retryFailed();
   } catch(err){
     CFG = prev;
@@ -4803,6 +4874,7 @@ $('#cfgClear').addEventListener('click', () => {
   if (QUEUE.length && !confirm(`${QUEUE.length} change(s) have not synced yet. Disconnect anyway?`)) return;
   localStorage.removeItem(K_CFG); localStorage.removeItem(K_STATE); localStorage.removeItem(K_QUEUE);
   CFG = null; S = EMPTY_STATE(); QUEUE = [];
+  carryLinkToHomeScreen();
   go('setup');
 });
 
@@ -5606,6 +5678,14 @@ renderAll();
   if (!inv) return;
   history.replaceState(null, '', location.pathname + location.search);
   if (CFG && CFG.token === inv.token) return;
+  if (standalone()){
+    // The home-screen icon opens with the link it was added with, every time.
+    // Use it once, to connect a new icon; after that this phone's own choice
+    // (another link, or Disconnect) stands.
+    if (CFG && CFG.url) return;
+    if (load(K_LAUNCH, '') === inv.token) return;
+    save(K_LAUNCH, inv.token);
+  }
   if (CFG && CFG.url){
     const pending = QUEUE.length ? `\n\n${QUEUE.length} change(s) on this phone haven't synced and will be lost.` : '';
     if (!confirm('Open this invite? This phone switches to it and stops showing what it shows now.' + pending)) return;
@@ -5618,6 +5698,7 @@ document.body.classList.toggle('guest', !!GUEST());
 
 if (CFG && CFG.url){ go('home'); sync(); checkAi(); }
 else go('setup');
+carryLinkToHomeScreen();
 </script>
 </body>
 </html>
