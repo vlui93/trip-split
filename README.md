@@ -601,6 +601,11 @@ to one request per change.
 
 ## Troubleshooting
 
+- **The app shows a GitHub 404 page.** GitHub Pages is off, for example after
+  the repo was made private (free accounts can't host Pages from a private
+  repo) and back to public. Turn it on again in **Settings → Pages**: source
+  *Deploy from a branch*, `main`, `/ (root)`. A phone that has opened the app
+  before keeps opening its saved copy meanwhile, and its data is unaffected.
 - **`setup()` "runs" but nothing happens.** The dropdown is set to a different
   function. Select `setup` and run it again.
 - **"Backend returned non-JSON".** The deployment's access is not set to

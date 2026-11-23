@@ -8,7 +8,7 @@
 // receipt reader (ocr/) is large and never changes within a version, so it's
 // cache-first and only stored once downloaded from Settings.
 const OCR_CACHE   = 'ocr-7.0.0';   // keep in step with OCR_CACHE in index.html
-const SHELL_CACHE = 'shell-v2';
+const SHELL_CACHE = 'shell-v3';
 const SHELL = ['./', 'index.html', 'shared.js', 'manifest.webmanifest', 'icon.svg',
   'icon-32-v2.png', 'icon-120-v2.png', 'icon-152-v2.png', 'icon-167-v2.png',
   'icon-180-v2.png', 'icon-192-v2.png', 'icon-512-v2.png'];
@@ -57,9 +57,11 @@ async function networkFirst(req){
   const slow = new Promise(r => setTimeout(r, NETWORK_WAIT, null));
 
   // Prefer the network, but don't wait past NETWORK_WAIT if we have a copy.
+  // An error page counts as no answer: if the site is down or switched off
+  // (a 404 while GitHub Pages is disabled), the saved app still opens.
   const first = await Promise.race([net.catch(() => null), slow]);
-  if (first) return first;
+  if (first && first.ok) return first;
   const hit = await saved();
   if (hit) return hit;
-  return net;   // nothing saved yet: wait it out, or fail as the browser would
+  return first || net;   // nothing saved yet: show what the site said, or wait it out
 }
