@@ -22,7 +22,9 @@ export const fixture = name => path.join(ROOT, 'tests', 'fixtures', name);
 
 /** Everything a test needs. Call `await t.close()` at the end. */
 export async function setup(){
+  let siteDown = false;      // answer every request with 404, as GitHub does while Pages is off
   const server = http.createServer(async (req, res) => {
+    if (siteDown){ res.writeHead(404, { 'content-type': 'text/html' }).end('<h1>404</h1>There isn\'t a GitHub Pages site here.'); return; }
     const rel = decodeURIComponent(new URL(req.url, 'http://x').pathname).replace(/^\/+/, '') || 'index.html';
     const file = path.join(ROOT, rel);
     if (!file.startsWith(ROOT)) { res.writeHead(403).end(); return; }
@@ -85,7 +87,7 @@ export async function setup(){
     await p.settle();
     return p;
   }
-  return { site, gas, book, owner, api, ok, phone, errors,
+  return { site, gas, book, owner, api, ok, phone, errors, siteDown: on => { siteDown = on; },
     async close(){ await browser.close(); server.close(); assert.deepEqual(errors, [], 'no page errors'); } };
 }
 
